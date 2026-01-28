@@ -1,0 +1,84 @@
+# Suraksha Drishti - Violence Detection System
+# Git Ignore File
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Uploaded files (user data)
+uploads/*.mp4
+uploads/*.avi
+uploads/*.jpg
+uploads/*.png
+
+# Alert recordings (can be large)
+alerts/*.avi
+alerts/*.mp4
+
+# Keep the folder structure
+!uploads/.gitkeep
+!alerts/.gitkeep
+
+# Large model files (optional - uncomment if you don't want to upload models)
+# *.keras
+# *.tflite
+# *.h5
+
+# Dataset (too large for GitHub)
+Real Life Violence Dataset/
+
+# Logs
+*.log
+logs/
+
+# Environment variables (if any)
+.env
+.env.local
+.env.*.local
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Temporary files
+*.tmp
+*.temp
