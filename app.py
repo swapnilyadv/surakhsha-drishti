@@ -51,7 +51,7 @@ ALERT_CONFIG = {
     'recipient_email': '2024.swapnil.yadav@ves.ac.in',  # Where to send alerts (same email or different)
     'cooldown_seconds': 60,  # Minimum time between alerts
     'last_alert_time': 0,
-    'violence_threshold': 70  # Minimum confidence to trigger alert
+    'violence_threshold': 50  # Minimum confidence to trigger alert (lowered for better sensitivity)
 }
 
 # Global variables
@@ -325,19 +325,25 @@ def detect_faces_and_gender(frame):
                                     man_conf = float(gender_data.get('Man', 0))
                                     woman_conf = float(gender_data.get('Woman', 0))
                                     
-                                    # Apply female boost (15%) to counter model bias
-                                    woman_conf_adjusted = woman_conf * 1.15
+                                    # Improved gender classification with bias correction
+                                    # Apply smaller boost (10%) to balance detection
+                                    woman_conf_adjusted = woman_conf * 1.10
                                     
+                                    # Use higher confidence threshold
                                     if man_conf > woman_conf_adjusted:
                                         gender = 'Male'
                                         confidence = man_conf
                                     else:
                                         gender = 'Female'
-                                        confidence = woman_conf
+                                        confidence = woman_conf_adjusted
+                                    
+                                    # Only include if confidence is reasonable (>30%)
+                                    if confidence < 30:
+                                        continue
                                 else:
                                     dominant = analysis.get('dominant_gender', 'Unknown')
                                     gender = 'Male' if dominant == 'Man' else 'Female'
-                                    confidence = 85.0
+                                    confidence = 70.0
                                 
                                 face_info = {
                                     'x': x,
@@ -603,20 +609,24 @@ def analyze_video_for_gender(original_frames, sample_every=2):
             
             for det in track:
                 conf = det.get('confidence', 50)
+                # Weight higher confidence detections more
+                weight = 1.0 if conf > 70 else 0.8 if conf > 50 else 0.6
+                
                 if det['gender'] == 'Male':
-                    male_votes += 1
-                    male_confidence += conf
+                    male_votes += weight
+                    male_confidence += conf * weight
                 elif det['gender'] == 'Female':
-                    female_votes += 1
-                    female_confidence += conf
+                    female_votes += weight
+                    female_confidence += conf * weight
             
             # Weighted voting: consider both count and confidence
-            male_score = male_votes * (male_confidence / max(male_votes, 1))
-            female_score = female_votes * (female_confidence / max(female_votes, 1))
+            male_score = male_votes * (male_confidence / max(male_votes, 0.1))
+            female_score = female_votes * (female_confidence / max(female_votes, 0.1))
             
-            if male_score > female_score:
+            # Only count if we have sufficient confidence (threshold: 100)
+            if male_score > female_score and male_score > 100:
                 all_gender_results['unique_males'] += 1
-            elif female_score > male_score:
+            elif female_score > male_score and female_score > 100:
                 all_gender_results['unique_females'] += 1
         
         all_gender_results['total_faces'] = len(person_tracks)
@@ -630,26 +640,98 @@ def analyze_video_for_gender(original_frames, sample_every=2):
     return all_gender_results
 
 
+def calculate_motion_intensity(frames):
+    """
+    Calculate motion intensity from frame differences.
+    Violence typically has high, erratic motion.
+    """
+    if len(frames) < 2:
+        return 0
+    
+    motion_scores = []
+    for i in range(1, len(frames)):
+        # Calculate frame difference
+        diff = np.abs(frames[i].astype(float) - frames[i-1].astype(float))
+        motion_score = np.mean(diff)
+        motion_scores.append(motion_score)
+    
+    if len(motion_scores) == 0:
+        return 0
+    
+    # Calculate statistics
+    avg_motion = np.mean(motion_scores)
+    max_motion = np.max(motion_scores)
+    std_motion = np.std(motion_scores)
+    
+    # High violence indicators: high average + high variance
+    motion_intensity = (avg_motion * 0.4) + (std_motion * 0.3) + (max_motion * 0.3)
+    
+    return motion_intensity
+
+
 def predict_violence(frames):
-    """Make prediction on processed frames."""
+    """Make prediction on processed frames with ENSEMBLE method for improved accuracy."""
     global model
     
     if model is None:
         return None, 0
     
-    frames = np.expand_dims(frames, axis=0)
-    prediction = model.predict(frames, verbose=0)
-    predicted_class = np.argmax(prediction[0])
-    confidence = float(prediction[0][predicted_class]) * 100
+    # === METHOD 1: Deep Learning Model ===
+    frames_expanded = np.expand_dims(frames, axis=0)
+    prediction = model.predict(frames_expanded, verbose=0)
     
-    # Apply threshold adjustment - be more sensitive to violence
-    # If violence probability is above 40%, lean towards violence
-    violence_prob = float(prediction[0][1]) * 100
-    if violence_prob > 40:
-        return 'Violence', violence_prob
+    # Get raw probabilities
+    dl_violence_prob = float(prediction[0][1]) * 100
+    dl_non_violence_prob = float(prediction[0][0]) * 100
     
-    class_names = ['Non-Violence', 'Violence']
-    return class_names[predicted_class], confidence
+    # === METHOD 2: Motion Analysis ===
+    motion_intensity = calculate_motion_intensity(frames)
+    
+    # Normalize motion score to 0-100 scale
+    # Typical values: non-violence 5-15, violence 20-50+
+    motion_violence_score = min(100, (motion_intensity / 40) * 100)
+    
+    print(f"[DEBUG] DL Model - Violence: {dl_violence_prob:.2f}%, Non-Violence: {dl_non_violence_prob:.2f}%")
+    print(f"[DEBUG] Motion Analysis - Intensity: {motion_intensity:.2f}, Score: {motion_violence_score:.2f}%")
+    
+    # === ENSEMBLE DECISION ===
+    # Weight: 60% DL model, 40% motion analysis
+    ensemble_violence_score = (dl_violence_prob * 0.6) + (motion_violence_score * 0.4)
+    ensemble_non_violence_score = 100 - ensemble_violence_score
+    
+    print(f"[DEBUG] ENSEMBLE - Violence: {ensemble_violence_score:.2f}%, Non-Violence: {ensemble_non_violence_score:.2f}%")
+    
+    prediction_label = None
+    confidence_score = 0
+    
+    # Decision logic with ensemble scores
+    # Case 1: High confidence violence (either method strongly agrees)
+    if ensemble_violence_score >= 45 or (dl_violence_prob >= 30 and motion_violence_score >= 40):
+        prediction_label = 'Violence'
+        confidence_score = ensemble_violence_score
+        print(f"[DETECTION] Violence Detected: {ensemble_violence_score:.2f}%")
+    
+    # Case 2: Clear non-violence (low scores on both methods)
+    elif ensemble_non_violence_score >= 60 and motion_violence_score < 30:
+        prediction_label = 'Non-Violence'
+        confidence_score = ensemble_non_violence_score
+        print(f"[DETECTION] Non-Violence: {ensemble_non_violence_score:.2f}%")
+    
+    # Case 3: Motion suggests violence even if DL doesn't
+    elif motion_violence_score >= 50:
+        prediction_label = 'Violence'
+        confidence_score = max(ensemble_violence_score, motion_violence_score)
+        print(f"[DETECTION] Motion-based Violence: {motion_violence_score:.2f}%")
+    
+    # Case 4: Default to argmax
+    else:
+        predicted_class = np.argmax(prediction[0])
+        class_names = ['Non-Violence', 'Violence']
+        prediction_label = class_names[predicted_class]
+        confidence_score = float(prediction[0][predicted_class]) * 100
+        print(f"[DETECTION] Standard Detection: {prediction_label} at {confidence_score:.2f}%")
+    
+    return prediction_label, confidence_score
 
 
 def extract_frames_from_buffer(frame_buffer):
@@ -687,9 +769,38 @@ class CameraStream:
         self.alert_sent = False
         
     def start(self):
-        self.cap = cv2.VideoCapture(self.source)
+        print(f"Opening camera source: {self.source}")
+        
+        # For macOS: Use AVFoundation backend and force built-in camera
+        # This prevents iPhone Continuity Camera from being used
+        if self.source == 0:
+            # Try with explicit backend (AVFoundation for macOS)
+            self.cap = cv2.VideoCapture(self.source, cv2.CAP_AVFOUNDATION)
+            print("Using AVFoundation backend (macOS built-in camera)")
+        else:
+            self.cap = cv2.VideoCapture(self.source)
+        
+        # Try to set camera properties for better compatibility
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        
         if not self.cap.isOpened():
+            print("✗ Camera failed to open")
             return False
+        
+        # Test if we can actually read a frame
+        ret, test_frame = self.cap.read()
+        if not ret or test_frame is None:
+            print("✗ Camera opened but cannot read frames")
+            print("Tip: Make sure no other app is using the camera")
+            print("Tip: Check System Settings → Privacy & Security → Camera")
+            self.cap.release()
+            return False
+        
+        print("✓ Camera test successful - can read frames")
+        print(f"  Resolution: {int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+        print(f"  Backend: {self.cap.getBackendName()}")
+        
         self.is_running = True
         self.alert_sent = False
         threading.Thread(target=self._capture_loop, daemon=True).start()
@@ -905,11 +1016,19 @@ def start_webcam():
     if webcam_stream and webcam_stream.is_running:
         return jsonify({'status': 'already_running'})
     
-    webcam_stream = CameraStream(source=0)
-    if webcam_stream.start():
-        return jsonify({'status': 'started'})
-    else:
-        return jsonify({'error': 'Could not open webcam'}), 500
+    # Try multiple camera indices (macOS might use different index)
+    for camera_index in [0, 1]:
+        print(f"Trying camera index {camera_index}...")
+        webcam_stream = CameraStream(source=camera_index)
+        if webcam_stream.start():
+            print(f"✓ Camera {camera_index} opened successfully!")
+            return jsonify({'status': 'started', 'camera_index': camera_index})
+        else:
+            print(f"✗ Camera {camera_index} failed")
+            if webcam_stream:
+                webcam_stream.stop()
+    
+    return jsonify({'error': 'Could not open webcam. Check camera permissions in System Settings > Privacy & Security > Camera'}), 500
 
 
 @app.route('/webcam/stop', methods=['POST'])

@@ -4,5 +4,23 @@
     "confidence": 90.62628149986267,
     "source": "Upload",
     "video_path": "/Users/swapnil/Desktop/AI Model/uploads/20260128_125807_V_989.mp4"
+  },
+  {
+    "time": "2026-02-06 09:45:23",
+    "confidence": 76.79616808891296,
+    "source": "WEBCAM",
+    "video_path": "/Users/swapnil/Desktop/AI Model/alerts/violence_webcam_20260206_094522.mp4"
+  },
+  {
+    "time": "2026-02-11 12:35:08",
+    "confidence": 59.60580875946689,
+    "source": "Upload",
+    "video_path": "/Users/swapnil/Desktop/AI Model/uploads/20260211_123451_V_12.mp4"
+  },
+  {
+    "time": "2026-02-11 12:36:40",
+    "confidence": 59.655914038107525,
+    "source": "Upload",
+    "video_path": "/Users/swapnil/Desktop/AI Model/uploads/20260211_123632_V_28.mp4"
   }
 ]
