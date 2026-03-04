@@ -1274,10 +1274,10 @@ if __name__ == '__main__':
     print("\n" + "="*60)
     print("Violence Detection Web Application (with Gender Detection)")
     print("="*60)
-    print("Open your browser: http://127.0.0.1:8080")
+    print("Open your browser: http://127.0.0.1:8085")
     print("="*60)
     print("\n📧 To enable email alerts, configure:")
     print("   POST /alerts/config with sender_email, sender_password, recipient_email")
     print("="*60 + "\n")
     
-    app.run(debug=False, host='0.0.0.0', port=8080, threaded=True)
+    app.run(debug=False, host='0.0.0.0', port=8085, threaded=True)
