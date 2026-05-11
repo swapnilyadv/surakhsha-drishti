@@ -25,6 +25,11 @@ import os
 import threading
 import smtplib
 import json
+import wave
+import struct
+import math
+import subprocess
+import platform
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -53,35 +58,35 @@ except ImportError:
 
 CONFIG = {
     # Camera settings
-    'camera_id': 0,  # USB camera index (usually 0)
+    'camera_id': 0,
     'frame_width': 640,
     'frame_height': 480,
-    'fps': 15,  # Lower FPS for Pi performance
-    
+    'fps': 15,
+
     # Model settings
-    'model_path': 'best_violence_model.keras',  # Will be converted to TFLite
+    'model_path': 'best_violence_model.keras',
     'tflite_model_path': 'violence_model.tflite',
     'input_size': (112, 112),
     'sequence_length': 24,
-    'skip_frames': 3,  # Process every Nth frame to save CPU
-    
-    # Detection settings
-    'violence_threshold': 60,  # Confidence threshold (%)
-    'cooldown_seconds': 60,  # Time between alerts
-    
+    'skip_frames': 3,
+
+    # Detection settings (DL-primary, matches main app)
+    'violence_threshold': 65,   # DL model confidence to call Violence
+    'cooldown_seconds': 60,
+
     # Email alert settings
     'email_enabled': True,
     'smtp_server': 'smtp.gmail.com',
     'smtp_port': 587,
-    'sender_email': 'surakshadrishti.vesit@gmail.com',
-    'sender_password': 'kaqq zozs gthm zpla',  # Gmail App Password
-    'recipient_email': '2024.swapnil.yadav@ves.ac.in',
-    
+    'sender_email': 'swapnilyadav.dude@gmail.com',
+    'sender_password': 'veqc boha jfpo atqq',
+    'recipient_email': 'swapnilyadav.dude@gmail.com',
+
     # Recording settings
     'record_on_violence': True,
-    'recording_duration': 10,  # seconds
+    'recording_duration': 10,
     'alerts_folder': 'alerts',
-    
+
     # Display settings (set False for headless Pi)
     'show_display': True,
     'display_width': 640,
@@ -92,8 +97,71 @@ CONFIG = {
 
 frame_buffer = deque(maxlen=CONFIG['sequence_length'])
 last_alert_time = 0
-is_recording = False
-alert_lock = threading.Lock()
+is_recording    = False
+alert_lock      = threading.Lock()
+
+# ── Alarm state ──────────────────────────────────────────────────────────
+_alarm_active  = False
+_alarm_process = None
+
+
+def _generate_alarm_wav():
+    """Create a police-siren WAV file (pure stdlib, no extras needed)."""
+    alarm_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'alarm.wav')
+    if os.path.exists(alarm_path):
+        return alarm_path
+    sr, dur = 44100, 2
+    total   = sr * dur
+    with wave.open(alarm_path, 'w') as wf:
+        wf.setparams((1, 2, sr, total, 'NONE', 'not compressed'))
+        for i in range(total):
+            t   = i / sr
+            f   = 1200 + 400 * math.sin(math.pi * t)
+            val = int(28000 * math.sin(2 * math.pi * f * t))
+            wf.writeframes(struct.pack('<h', val))
+    print(f'✅ Alarm WAV generated: {alarm_path}')
+    return alarm_path
+
+
+ALARM_WAV_PATH = _generate_alarm_wav()
+
+
+def start_alarm():
+    """Play a looping emergency siren until stop_alarm() is called."""
+    global _alarm_active, _alarm_process
+    if _alarm_active:
+        return
+    _alarm_active = True
+    print('🔔 ALARM: Violence detected — siren activated!')
+
+    def _loop():
+        global _alarm_active, _alarm_process
+        while _alarm_active:
+            try:
+                # On Pi (Linux) use aplay; on Mac use afplay
+                player = 'afplay' if platform.system() == 'Darwin' else 'aplay'
+                _alarm_process = subprocess.Popen(
+                    [player, ALARM_WAV_PATH],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                _alarm_process.wait()
+            except Exception as e:
+                print(f'[Alarm] {e}')
+                time.sleep(1)
+
+    threading.Thread(target=_loop, daemon=True).start()
+
+
+def stop_alarm():
+    """Stop the siren."""
+    global _alarm_active, _alarm_process
+    if not _alarm_active:
+        return
+    _alarm_active = False
+    if _alarm_process and _alarm_process.poll() is None:
+        _alarm_process.terminate()
+    print('🔕 Alarm stopped.')
+
 
 # ======================= MODEL LOADING =======================
 
@@ -157,40 +225,46 @@ def load_model():
 
 
 def predict_violence(frames):
-    """Run violence prediction on a sequence of frames."""
+    """
+    DL-primary violence prediction (matches main app logic).
+    Frames are float32 in [0,1]. Trust DL >= 65% directly.
+    """
     global model, interpreter
-    
+
     if len(frames) < CONFIG['sequence_length']:
         return None, 0
-    
-    # Preprocess frames
+
     processed = []
     for frame in frames:
-        resized = cv2.resize(frame, CONFIG['input_size'])
+        resized    = cv2.resize(frame, CONFIG['input_size'])
         normalized = resized.astype(np.float32) / 255.0
         processed.append(normalized)
-    
+
     input_data = np.array([processed])
-    
+
     if USE_TFLITE and interpreter is not None:
-        # TFLite inference
-        input_details = interpreter.get_input_details()
+        input_details  = interpreter.get_input_details()
         output_details = interpreter.get_output_details()
-        
         interpreter.set_tensor(input_details[0]['index'], input_data)
         interpreter.invoke()
         prediction = interpreter.get_tensor(output_details[0]['index'])
     else:
-        # Keras inference
         prediction = model.predict(input_data, verbose=0)
-    
-    confidence = float(prediction[0][0]) * 100
-    is_violence = confidence >= 50
-    
-    if is_violence:
-        return 'Violence', confidence
+
+    dl_violence_prob     = float(prediction[0][1]) * 100
+    dl_non_violence_prob = float(prediction[0][0]) * 100
+
+    # DL-primary decision (same thresholds as main app)
+    if dl_violence_prob >= 65:
+        return 'Violence', dl_violence_prob
+    elif dl_non_violence_prob >= 72:
+        return 'Non-Violence', dl_non_violence_prob
     else:
-        return 'Non-Violence', 100 - confidence
+        # Uncertain zone: trust argmax with raw DL probability
+        if dl_violence_prob >= 50:
+            return 'Violence', dl_violence_prob
+        else:
+            return 'Non-Violence', dl_non_violence_prob
 
 
 # ======================= EMAIL ALERTS =======================
@@ -387,14 +461,16 @@ def run_detection():
                         
                         # Check for violence
                         if prediction == 'Violence' and confidence >= CONFIG['violence_threshold']:
-                            print(f"\n🚨 VIOLENCE DETECTED! Confidence: {confidence:.1f}%")
-                            
-                            # Record clip in background
+                            print(f"\n\U0001f6a8 VIOLENCE DETECTED! Confidence: {confidence:.1f}%")
+                            start_alarm()   # 🔔 siren on
+
+                            # Record clip + send email in background
                             def alert_thread():
                                 video_path = record_violence_clip(camera, CONFIG['recording_duration'])
+                                stop_alarm()   # 🔕 siren off after recording done
                                 if video_path:
                                     send_email_alert(video_path, confidence)
-                            
+
                             with alert_lock:
                                 if not is_recording:
                                     threading.Thread(target=alert_thread, daemon=True).start()

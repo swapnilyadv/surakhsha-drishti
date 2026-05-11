@@ -31,8 +31,25 @@ CONFIG = {
     "input_size": (112, 112),
     "sequence_length": 24,
     "camera_id": 0,
-    "violence_threshold": 65
+    "violence_threshold": 65,
+    "email_enabled": True,
+    "smtp_server": "smtp.gmail.com",
+    "smtp_port": 587,
+    "sender_email": "surakshadrishti.vesit@gmail.com",
+    "sender_password": "kaqq zozs gthm zpla",
+    "recipient_email": "2024.swapnil.yadav@ves.ac.in",
+    "police_email": "police.alert.system@gmail.com",
+    "cooldown_seconds": 60,
+    "record_evidence": True,
+    "pre_recording_buffer": 100, # Capture 100 frames before detection
+    "post_recording_buffer": 200 # Capture 200 frames after detection
 }
+
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 
 class ViolenceDetectorApp:
     def __init__(self, window):
@@ -52,11 +69,25 @@ class ViolenceDetectorApp:
         self.people_count = 0
         self.gender_info = "N/A"
         
-        # Try to load face cascade for gender detection helper
-        try:
+        # NEW: Add a frame counter for skipping
+        self.frame_counter = 0
+        
+        # New Video/Alert Variables
+        self.full_frame_buffer = deque(maxlen=CONFIG["pre_recording_buffer"])
+        self.post_violence_buffer = []
+        self.violence_was_detected = False
+        self.last_alert_time = 0
+        
+        # Fixed Face Cascade path to use your local file
+        xml_path = "haarcascade_frontalface_default.xml"
+        if os.path.exists(xml_path):
+            self.face_cascade = cv2.CascadeClassifier(xml_path)
+            print("✓ Local Face Cascade Loaded")
+        else:
+            # Fallback to system default if available
             self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        except:
-            self.face_cascade = None
+            if self.face_cascade.empty():
+                print("⚠️ Warning: No face detector found!")
 
         self.setup_ui()
         self.load_model_safe()
@@ -135,50 +166,39 @@ class ViolenceDetectorApp:
         self.footer_status.pack(side="bottom", fill="x")
 
     def load_model_safe(self):
-        """Robust model loading with Flex op handling for Pi."""
+        """Loads TFLite or sets up Motion Fallback if AI fails."""
         self.update_status("Loading Model...")
-        
         try:
-            import tensorflow as tf
-            
-            # 1. Try TFLite with Flex Delegate if available
-            if os.path.exists(CONFIG["model_tflite"]):
-                try:
-                    # Attempt to load with Flex delegate (common issue on Pi)
-                    # We check if we can initialize it
-                    self.interpreter = tf.lite.Interpreter(model_path=CONFIG["model_tflite"])
-                    self.interpreter.allocate_tensors()
-                    print("SUCCESS: TFLite model loaded.")
-                    self.update_status("TFLite Model Active")
-                    return
-                except Exception as e:
-                    print(f"DEBUG: TFLite failed (likely Flex ops): {e}")
-            
-            # 2. Fallback to Keras model (Always works but uses more RAM/CPU)
-            if os.path.exists(CONFIG["model_keras"]):
-                print("FALLBACK: Loading full Keras model...")
-                self.model = tf.keras.models.load_model(CONFIG["model_keras"])
-                print("SUCCESS: Keras model loaded.")
-                self.update_status("Keras Model Loaded (Steady)")
-            else:
-                messagebox.showerror("Error", f"Model files not found!\nNeed {CONFIG['model_keras']}")
-                
-        except ImportError:
-            # Fallback for tflite-runtime only
-            try:
-                import tflite_runtime.interpreter as tflite
-                self.interpreter = tflite.Interpreter(model_path=CONFIG["model_tflite"])
-                self.interpreter.allocate_tensors()
-                self.update_status("TFLite (Runtime) Active")
-            except Exception as e:
-                messagebox.showerror("Runtime Error", f"Deep Learning libraries missing or incompatible.\n{e}")
+            import tflite_runtime.interpreter as tflite
+            # Try to load the TFLite model
+            self.interpreter = tflite.Interpreter(model_path=CONFIG["model_tflite"])
+            self.interpreter.allocate_tensors()
+            self.input_details = self.interpreter.get_input_details()
+            self.output_details = self.interpreter.get_output_details()
+            self.model_loaded = True
+            print("✓ TFLite Model Loaded Successfully")
+            self.update_status("System Online: TFLite Ready")
+        except Exception as e:
+            print(f"AI Model Error (likely Flex ops): {e}")
+            self.model_loaded = False
+            self.update_status("Running: Motion Analysis Mode (AI Offline)")
 
     def update_status(self, text):
         self.footer_status.config(text=text)
 
     def toggle_camera(self):
         if not self.is_running:
-            self.cap = cv2.VideoCapture(CONFIG["camera_id"])
+            # Try V4L2 backend on Linux to avoid GStreamer error
+            self.cap = cv2.VideoCapture(CONFIG["camera_id"], cv2.CAP_V4L2)
+            
+            # NEW: Set a lower resolution to reduce lag
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+            if not self.cap.isOpened():
+                # Fallback to default if V4L2 isn't working
+                self.cap = cv2.VideoCapture(CONFIG["camera_id"])
+                
             if not self.cap.isOpened():
                 messagebox.showerror("Camera Error", "Could not access webcam.")
                 return
@@ -187,7 +207,7 @@ class ViolenceDetectorApp:
             self.window.after(10, self.update_frame)
         else:
             self.is_running = False
-            self.start_btn.config(text="START CAMERA", bg=THEME_GREEN)
+            self.start_btn.config(text="STOP CAMERA", bg=THEME_GREEN)
             if self.cap:
                 self.cap.release()
             self.video_label.config(image='')
@@ -198,24 +218,40 @@ class ViolenceDetectorApp:
 
         ret, frame = self.cap.read()
         if not ret:
+            self.window.after(10, self.update_frame)
             return
+            
+        self.frame_counter += 1
 
-        # Simple Face detection for "People Count" and UI feedback
-        # Not using DeepFace here as it kills Raspberry Pi performance
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5) if self.face_cascade is not None else []
-        self.people_count = len(faces)
+        # Store full quality frame for evidence
+        self.full_frame_buffer.append(frame.copy())
         
-        # Add frame to buffer for sequence prediction
-        resized_for_model = cv2.resize(frame, CONFIG["input_size"])
-        normalized = resized_for_model.astype(np.float32) / 255.0
-        self.frame_buffer.append(normalized)
-        
-        # Run prediction if buffer is full
-        if len(self.frame_buffer) == CONFIG["sequence_length"]:
-            self.run_inference()
+        # Handle ongoing evidence recording
+        if self.violence_was_detected:
+            self.post_violence_buffer.append(frame.copy())
+            if len(self.post_violence_buffer) >= CONFIG["post_recording_buffer"]:
+                self.save_and_send_evidence()
 
-        # UI Updates
+        # --- OPTIMIZATION: Process only every 3rd frame ---
+        if self.frame_counter % 3 == 0:
+            # Add frame to buffer for sequence prediction
+            resized_for_model = cv2.resize(frame, CONFIG["input_size"])
+            normalized = resized_for_model.astype(np.float32) / 255.0
+            self.frame_buffer.append(normalized)
+            
+            # Run prediction if buffer is full
+            if len(self.frame_buffer) == CONFIG["sequence_length"]:
+                self.run_inference()
+
+            # Simple Face detection for "People Count" and UI feedback
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = self.face_cascade.detectMultiScale(gray, 1.1, 4) if self.face_cascade is not None else []
+            self.people_count = len(faces)
+        else:
+            # On skipped frames, just grab the last known face data
+            faces = [] # Or you could store the last known faces to make it look smoother
+
+        # UI Updates (run every frame for smoothness)
         # Update Status Box Color
         if "VIOLENCE" in self.prediction_text:
             self.status_box.config(text=self.prediction_text, bg="#f44336", fg="white")
@@ -225,16 +261,28 @@ class ViolenceDetectorApp:
         self.prob_label.config(text=f"Confidence: {self.prediction_prob:.1f}%")
         self.people_label.config(text=f"People in Frame: {self.people_count}")
         
-        # Draw bounding boxes for UI feedback (similar to web app)
+        # Draw bounding boxes and detect "Gender" (Simplified for Pi)
         display_frame = frame.copy()
         for (x, y, w, h) in faces:
-            cv2.rectangle(display_frame, (x, y), (x+w, y+h), (233, 69, 96), 2)
-            cv2.putText(display_frame, "Person", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (233, 69, 96), 2)
+            # Improved logic: Male/Female based on face dimensions (placeholder for Pi speed)
+            is_male = (w * h) > 3500 
+            gender = "Male" if is_male else "Female"
+            color = (76, 175, 80) if is_male else (233, 69, 96) # Green vs Pink
+            
+            cv2.rectangle(display_frame, (x, y), (x+w, y+h), color, 2)
+            cv2.putText(display_frame, f"{gender}", (x, y-10), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            
+            # Update the side label
+            self.gender_info = f"Last Detected: {gender}"
+
+        self.gender_label.config(text=f"Gender Context: {self.gender_info}")
 
         # Convert to TK Image
         display_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(display_frame)
-        img = img.resize((700, 525), Image.Resampling.LANCZOS)
+        # NEW: Use a faster resizing algorithm
+        img = img.resize((700, 525), Image.Resampling.BILINEAR)
         imgtk = ImageTk.PhotoImage(image=img)
         self.video_label.imgtk = imgtk
         self.video_label.configure(image=imgtk)
@@ -242,31 +290,112 @@ class ViolenceDetectorApp:
         self.window.after(10, self.update_frame)
 
     def run_inference(self):
-        input_data = np.array([list(self.frame_buffer)], dtype=np.float32)
-        
-        try:
-            if self.model: # Keras
-                prediction = self.model.predict(input_data, verbose=0)
-            elif self.interpreter: # TFLite
-                input_details = self.interpreter.get_input_details()
-                output_details = self.interpreter.get_output_details()
-                self.interpreter.set_tensor(input_details[0]['index'], input_data)
-                self.interpreter.invoke()
-                prediction = self.interpreter.get_tensor(output_details[0]['index'])
+        """Unified analysis: Uses AI if loaded, else uses Motion Energy."""
+        if not self.model_loaded:
+            # --- MOTION ANALYSIS FALLBACK ---
+            # If the AI model failed (no Flex support), we use Pixel Difference
+            # to detect 'Violence-like' motion.
+            if len(self.frame_buffer) < 2: return
+            
+            f1 = self.frame_buffer[-1]
+            f2 = self.frame_buffer[-2]
+            
+            # Simple motion math: Pixel difference between frames
+            diff = cv2.absdiff((f1 * 255).astype(np.uint8), (f2 * 255).astype(np.uint8))
+            motion_score = np.mean(diff)
+            
+            # Threshold for "Aggressive" movement (calibrated for Pi 3)
+            if motion_score > 35: # High value = sudden/violent movement
+                self.prediction_text = "🚨 VIOLENCE DETECTED"
+                self.prediction_prob = min(motion_score * 2.5, 99.0)
             else:
-                return
+                self.prediction_text = "NORMAL"
+                self.prediction_prob = 100 - (motion_score * 2)
+            return
 
+        # AI-based inference for machines with proper runtime
+        try:
+            input_data = np.array([list(self.frame_buffer)], dtype=np.float32)
+            self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
+            self.interpreter.invoke()
+            prediction = self.interpreter.get_tensor(self.output_details[0]['index'])
+            
             prob = float(prediction[0][0]) * 100
             if prob >= CONFIG["violence_threshold"]:
-                self.prediction_text = "VIOLENCE DETECTED"
+                self.prediction_text = "🚨 VIOLENCE DETECTED"
                 self.prediction_prob = prob
             else:
                 self.prediction_text = "NORMAL"
                 self.prediction_prob = 100 - prob
         except Exception as e:
-            print(f"Inference error: {e}")
+            # Fallback to motion if inference crashes mid-run
+            self.model_loaded = False
+            print(f"Warning: Inference crashed, switching to Motion Mode: {e}")
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = ViolenceDetectorApp(root)
-    root.mainloop()
+        if "VIOLENCE" in self.prediction_text:
+            self.trigger_evidence_capture()
+
+    def trigger_evidence_capture(self):
+        """Start full evidence capture when violence is flagged."""
+        if not self.violence_was_detected:
+            current_time = time.time()
+            if current_time - self.last_alert_time > CONFIG["cooldown_seconds"]:
+                print("🚨 Violence Detected! Capturing start-to-end evidence...")
+                self.violence_was_detected = True
+                self.post_violence_buffer = [] # Reset for new capture
+
+    def save_and_send_evidence(self):
+        """Stitches start-to-end video and sends to police and user."""
+        self.violence_was_detected = False
+        self.last_alert_time = time.time()
+        
+        # Combine buffers
+        full_evidence = list(self.full_frame_buffer) + self.post_violence_buffer
+        self.post_violence_buffer = []
+        
+        # Save Video
+        filename = f"evidence_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        out_path = os.path.join(os.getcwd(), filename)
+        
+        h, w = full_evidence[0].shape[:2]
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(out_path, fourcc, 15.0, (w, h))
+        
+        for f in full_evidence:
+            cv2.putText(f, "EVIDENCE LOG - " + datetime.now().strftime('%H:%M:%S'), 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            out.write(f)
+        out.release()
+        
+        print(f"📹 Evidence video saved: {out_path}")
+        
+        # Send Email in thread
+        threading.Thread(target=self.send_alerts, args=(out_path,)).start()
+
+    def send_alerts(self, video_path):
+        try:
+            for email in [CONFIG["recipient_email"], CONFIG["police_email"]]:
+                if not email: continue
+                msg = MIMEMultipart()
+                msg['From'] = CONFIG["sender_email"]
+                msg['To'] = email
+                msg['Subject'] = "🚨 CRITICAL: VIOLENCE EVIDENCE DETECTED"
+                
+                body = f"VIOLENCE DETECTED\nTime: {datetime.now()}\n\nPlease find attached the 'start-to-end' video evidence as proof."
+                msg.attach(MIMEText(body, 'plain'))
+                
+                with open(video_path, 'rb') as f:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(f.read())
+                    encoders.encode_base64(part)
+                    part.add_header('Content-Disposition', f'attachment; filename={os.path.basename(video_path)}')
+                    msg.attach(part)
+                
+                server = smtplib.SMTP(CONFIG['smtp_server'], CONFIG['smtp_port'])
+                server.starttls()
+                server.login(CONFIG['sender_email'], CONFIG['sender_password'])
+                server.send_message(msg)
+                server.quit()
+                print(f"📧 Alert sent to {email}")
+        except Exception as e:
+            print(f"❌ Alert failed: {e}")

@@ -24,3 +24,7 @@ pillow>=10.0.0
 
 # Utilities
 python-dotenv>=1.0.0  # For environment variables (optional)
+requests>=2.31.0      # For IP geolocation in police alerts
+
+# Model Evaluation
+scikit-learn>=1.3.0
