@@ -1,0 +1,2 @@
+{"sessionId": "7630d6", "runId": "pre-fix", "hypothesisId": "H1", "location": "server.py:add_camera:entry", "message": "Add camera request received", "data": {"name": "Laptop Webcam", "source": "0", "cam_id": "1"}, "timestamp": 1778572256962}
+{"sessionId": "7630d6", "runId": "pre-fix", "hypothesisId": "H1", "location": "server.py:_camera_thread:open-success", "message": "Camera source opened and status emitted online", "data": {"cam_id": "1", "source": "0"}, "timestamp": 1778572258721}
