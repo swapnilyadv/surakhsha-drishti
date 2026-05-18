@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #050810;
+  --bg2: #080d1a;
+  --bg3: #0d1525;
+  --panel: #0a1020;
+  --border: #1a2840;
+  --border-glow: #1e3a5f;
+  --accent: #00aaff;
+  --accent2: #0066cc;
+  --safe: #00ff88;
+  --warning: #ffaa00;
+  --danger: #ff2244;
+  --danger2: #cc0022;
+  --text: #c8daf0;
+  --text-dim: #4a6080;
+  --text-bright: #e8f4ff;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* Scanline overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.07) 2px,
+    rgba(0,0,0,0.07) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-glow); }
+
+/* Corner brackets utility */
+.bracket-box {
+  position: relative;
+}
+.bracket-box::before,
+.bracket-box::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-color: var(--accent);
+  border-style: solid;
+}
+.bracket-box::before { top: -1px; left: -1px; border-width: 2px 0 0 2px; }
+.bracket-box::after  { bottom: -1px; right: -1px; border-width: 0 2px 2px 0; }
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.7); }
+}
+@keyframes cam-alert-outline {
+  0%, 100% { outline-color: var(--danger); }
+  50%       { outline-color: rgba(255,34,68,0.25); }
+}
+@keyframes alert-flash-bg {
+  0%, 100% { background: rgba(255,34,68,0.13); }
+  50%       { background: rgba(255,34,68,0.06); }
+}
+@keyframes marker-pulse {
+  0%   { transform: rotate(-45deg) scale(1); box-shadow: 0 0 0px var(--danger); }
+  50%  { transform: rotate(-45deg) scale(1.15); box-shadow: 0 0 20px var(--danger); background: #ff2244; }
+  100% { transform: rotate(-45deg) scale(1); box-shadow: 0 0 0px var(--danger); }
+}
