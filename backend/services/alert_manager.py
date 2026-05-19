@@ -5,10 +5,10 @@ logger = logging.getLogger("suraksha.alert")
 
 class AlertManager:
     """
-    Intelligent Alert & Alarm Manager.
+    Intelligent Alert & Global Alarm Manager.
     - Manages live threat states, alarm audio activations, and acknowledgment handshakes.
-    - User Acknowledge stops the alarm sound ONLY, allowing the AI to keep recording safely.
-    - Automatically resets acknowledgment state when a brand new violence event starts.
+    - User Acknowledge mutes the audio locally, but AI stays active.
+    - Allows manual emergency override triggers to force alarm reactivations globally.
     """
     def __init__(self):
         self.violence_detected = False
@@ -33,24 +33,43 @@ class AlertManager:
         if violence_detected:
             # If threat was previously offline, this is a NEW threat event -> reset acknowledge!
             if not self.last_violence_state:
-                logger.info(f"[AlertManager] New threat event triggered: {threat_type} ({confidence:.2f})")
+                logger.info(f"[Alert] New threat event triggered: {threat_type} ({confidence:.2f})")
                 self.acknowledged = False
             
             # Alarm remains active unless the user explicitly muted it
             self.alarm_active = not self.acknowledged
         else:
-            self.alarm_active = False
+            # Do not force reset if it was triggered via manual emergency escalation!
+            if self.threat_type != "EMERGENCY_BACKUP":
+                self.alarm_active = False
 
         self.last_violence_state = violence_detected
 
+    def trigger_emergency(self, threat_label: str = "EMERGENCY_BACKUP"):
+        """
+        Force triggers the global alarm. Used for Emergency Escalation.
+        Resets acknowledgement so that all stations hear the sound again.
+        """
+        logger.info(f"[Alert] Manual global alarm force-triggered: {threat_label}")
+        self.acknowledged = False
+        self.alarm_active = True
+        self.threat_type = threat_label
+        self.violence_detected = True
+
+    def mute_alarm_globally(self):
+        """Mutes the active alarm globally. Used when dispatch is accepted."""
+        logger.info("[Alert] Alarm muted globally.")
+        self.alarm_active = False
+        self.acknowledged = True
+
     def acknowledge(self):
         """
-        Acknowledges active alarm.
+        Acknowledges active alarm locally.
         - Mutes the audio alert immediately (sets alarm_active to False).
         - Prevents alarm from re-triggering until a brand-new violence event is identified.
         """
-        if self.violence_detected:
-            logger.info("[AlertManager] Alarm acknowledged by user. Muting audio alert.")
+        if self.violence_detected or self.threat_type == "EMERGENCY_BACKUP":
+            logger.info("[Alert] Alarm acknowledged locally. Muting audio alert.")
             self.acknowledged = True
             self.alarm_active = False
             return True

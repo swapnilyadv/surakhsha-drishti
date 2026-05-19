@@ -168,12 +168,21 @@ export default function Home() {
     return () => window.removeEventListener('update-evidence-video', handler);
   }, [updateEvidence]);
 
+  useEffect(() => {
+    const handleSystemToast = (e: any) => {
+      const { message, isAlert } = e.detail;
+      showToast(message, isAlert);
+    };
+    window.addEventListener("show-system-toast", handleSystemToast);
+    return () => window.removeEventListener("show-system-toast", handleSystemToast);
+  }, [showToast]);
+
   const handleAlert = useCallback((msg: string) => {
     showToast(msg, true);
   }, [showToast]);
 
-  const isAlert = alertMsg.length > 0 || !!detection.violence;
-  const activeAlertMsg = alertMsg || `AI ACTIVE SURVEILLANCE ENGINE — THREAT THRESHOLD REACHED: ${detection.event || "VIOLENCE"} DETECTED`;
+  const isAlert = alertMsg.length > 0 || !!detection.violence || !!detection.alarm_active;
+  const activeAlertMsg = alertMsg || (detection.event === "EMERGENCY_BACKUP" ? `🚨 EMERGENCY BACKUP REQUESTED BY COOPERATING STATION` : `AI ACTIVE SURVEILLANCE ENGINE — THREAT THRESHOLD REACHED: ${detection.event || "VIOLENCE"} DETECTED`);
 
   return (
     <>

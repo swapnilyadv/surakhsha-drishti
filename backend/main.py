@@ -62,6 +62,7 @@ from services.pose_estimator   import PoseEstimator
 from services.frame_processor  import FrameProcessor
 from services.evidence_manager import EvidenceManager
 from services.alert_manager    import AlertManager
+from services.dispatch_manager import DispatchManager
 from fastapi.staticfiles       import StaticFiles
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -80,6 +81,7 @@ violence_detector = ViolenceDetector()
 pose_estimator    = PoseEstimator(POSE_MODEL)
 evidence_manager  = EvidenceManager(output_dir=str(BASE_DIR / "recordings"))
 alert_manager     = AlertManager()
+dispatch_manager  = DispatchManager()
 frame_processor: FrameProcessor | None = None
 
 # Track startup status
@@ -226,6 +228,7 @@ async def broadcast_loop():
     """
     logger.info("[Broadcaster] Started (3 Hz)")
     prev_payload: dict = {}
+    prev_recording_state = False
 
     while True:
         try:
@@ -244,6 +247,19 @@ async def broadcast_loop():
                     "type": "new_evidence",
                     "evidence": new_ev
                 }))
+
+            # Global real-time violence detection start broadcast trigger
+            is_rec = evidence_manager.is_recording
+            if is_rec and not prev_recording_state:
+                ev_id = f"EVD-REC-{int(evidence_manager.start_time)}"
+                logger.info(f"[Broadcaster] Auto-recording started. Broadcasting violence_detected event for {ev_id}")
+                asyncio.create_task(manager.broadcast({
+                    "event": "violence_detected",
+                    "alarm": True,
+                    "recording": True,
+                    "evidence_id": ev_id
+                }))
+            prev_recording_state = is_rec
 
             # Build the lightweight WebSocket payload (frontend contract)
             payload = {
@@ -400,6 +416,109 @@ async def select_source(source: str):
     logger.info(f"[Source] Dynamically selecting input source: {actual_source}")
     frame_processor.change_source(actual_source)
     return JSONResponse({"status": "success", "source": actual_source})
+
+
+from pydantic import BaseModel
+
+class DispatchRequest(BaseModel):
+    station: str
+    officer: str
+
+class EscalateRequest(BaseModel):
+    station: str
+    lat: float
+    lng: float
+
+# ── Evidence DB & Dispatch Sync Routes ──────────────────────────────────────────
+
+@app.get("/api/evidence", summary="Get all persistent evidence records")
+async def get_evidence():
+    return JSONResponse(evidence_manager.get_all_evidence())
+
+@app.post("/api/evidence/{evidence_id}/dispatch", summary="Dispatch police to incident")
+async def dispatch_evidence(evidence_id: str, req: DispatchRequest):
+    dispatch_info = dispatch_manager.accept_dispatch(evidence_id, req.station, req.officer)
+    if not dispatch_info:
+        return JSONResponse({"status": "error", "message": "Incident already accepted or dispatched"}, status_code=409)
+    
+    # Update evidence card status in database
+    updated_item = evidence_manager.update_evidence_status(evidence_id, {
+        "status": "Police Dispatched",
+        "authorityStation": req.station,
+        "dispatchTime": datetime.now().strftime("%I:%M %p")
+    })
+    
+    # Mute alarm globally
+    alert_manager.mute_alarm_globally()
+    
+    # Broadcast to all websocket connections
+    broadcast_data = {
+        "event": "dispatch_accepted",
+        "evidence_id": evidence_id,
+        "station": req.station,
+        "officer": req.officer,
+        "status": "POLICE_DISPATCHED"
+    }
+    await manager.broadcast(broadcast_data)
+    
+    return JSONResponse({"status": "success", "evidence": updated_item})
+
+@app.post("/api/evidence/{evidence_id}/escalate", summary="Escalate incident for more backup help")
+async def escalate_evidence(evidence_id: str, req: EscalateRequest):
+    dispatch_manager.escalate(evidence_id, req.station, req.lat, req.lng)
+    
+    # Update evidence card status in database
+    updated_item = evidence_manager.update_evidence_status(evidence_id, {
+        "status": "More Help Requested"
+    })
+    
+    # Trigger emergency alarm globally again
+    alert_manager.trigger_emergency("EMERGENCY_BACKUP")
+    
+    # Broadcast to all websocket connections
+    broadcast_data = {
+        "event": "need_more_help",
+        "evidence_id": evidence_id,
+        "station": req.station,
+        "location": {
+            "lat": req.lat,
+            "lng": req.lng
+        }
+    }
+    await manager.broadcast(broadcast_data)
+    
+    return JSONResponse({"status": "success", "evidence": updated_item})
+
+@app.post("/api/evidence/{evidence_id}/resolve", summary="Mark incident as resolved")
+async def resolve_evidence(evidence_id: str):
+    # Update status in persistent store
+    updated_item = evidence_manager.update_evidence_status(evidence_id, {
+        "status": "Resolved"
+    })
+    
+    # Clear tracking in dispatch manager
+    dispatch_manager.reset_incident(evidence_id)
+    
+    # If no other incidents are active/unresolved, we can mute the alarm
+    all_evs = evidence_manager.get_all_evidence()
+    active_incidents = [e for e in all_evs if e.get("status") in ["Active", "More Help Requested"]]
+    if not active_incidents:
+        alert_manager.mute_alarm_globally()
+        
+    # Broadcast resolved state to all dashboards
+    broadcast_data = {
+        "event": "evidence_resolved",
+        "evidence_id": evidence_id,
+        "status": "Resolved"
+    }
+    await manager.broadcast(broadcast_data)
+    
+    return JSONResponse({"status": "success", "evidence": updated_item})
+
+@app.post("/api/evidence/clear", summary="Clear persistent database records")
+async def clear_evidence():
+    evidence_manager.clear_all()
+    return JSONResponse({"status": "success"})
 
 
 @app.post("/api/acknowledge", summary="Acknowledge active alarm")

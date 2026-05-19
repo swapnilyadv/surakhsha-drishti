@@ -500,7 +500,12 @@ class FrameProcessor:
                     is_threat=is_threat, 
                     threat_type=threat_label, 
                     camera_id=f"CAM-{self.camera_index}", 
-                    camera_label=cam_label
+                    camera_label=cam_label,
+                    male_count=self._result.male_count,
+                    female_count=self._result.female_count,
+                    weapon_detected=self._result.weapon_detected,
+                    weapon_type=self._result.weapon_label,
+                    confidence=self._result.violence_confidence if self._result.violence_detected else self._result.weapon_confidence
                 )
                 
             ok, buf = cv2.imencode(

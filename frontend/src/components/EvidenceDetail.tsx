@@ -12,9 +12,17 @@ export default function EvidenceDetail({ evidence, onClose, onUpdate }: Props) {
   const mono: React.CSSProperties = { fontFamily: "monospace" };
 
   const handleDispatch = () => {
+    let stationName = "Mumbai Headquarters";
+    try {
+      const authStr = localStorage.getItem("sd_auth");
+      if (authStr) {
+        stationName = JSON.parse(authStr).user || stationName;
+      }
+    } catch {}
+
     onUpdate(evidence.id, {
       status: "Police Dispatched",
-      authorityStation: "Zone-7 Police Headquarter",
+      authorityStation: stationName,
       dispatchTime: new Date().toLocaleTimeString()
     });
   };
@@ -24,7 +32,18 @@ export default function EvidenceDetail({ evidence, onClose, onUpdate }: Props) {
   };
 
   const handleMoreHelp = () => {
-    onUpdate(evidence.id, { status: "More Help Requested" });
+    let stationName = "Mumbai Headquarters";
+    try {
+      const authStr = localStorage.getItem("sd_auth");
+      if (authStr) {
+        stationName = JSON.parse(authStr).user || stationName;
+      }
+    } catch {}
+
+    onUpdate(evidence.id, {
+      status: "More Help Requested",
+      authorityStation: stationName
+    });
   };
 
   const googleMapsUrl = `https://www.google.com/maps?q=${evidence.lat},${evidence.lng}`;
@@ -54,7 +73,11 @@ export default function EvidenceDetail({ evidence, onClose, onUpdate }: Props) {
           <div style={{ borderRight: "1px solid var(--border)" }}>
             <div style={{ background: "#000", aspectRatio: "16/9", width: "100%", height: 350, position: "relative" }}>
               {evidence.videoUrl ? (
-                <video src={evidence.videoUrl} controls autoPlay loop style={{ width: "100%", height: "100%" }} />
+                evidence.videoUrl.includes("/stream/mjpeg") ? (
+                  <img src={evidence.videoUrl} style={{ width: "100%", height: "100%", objectFit: "contain" }} alt="Live Surveillance Feed" />
+                ) : (
+                  <video src={evidence.videoUrl} controls autoPlay loop style={{ width: "100%", height: "100%" }} />
+                )
               ) : (
                 <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--bg3)" }}>
                   <div style={{ fontSize: 40, marginBottom: 10 }}>📹</div>
@@ -85,7 +108,7 @@ export default function EvidenceDetail({ evidence, onClose, onUpdate }: Props) {
             <div>
               <div style={{ ...mono, fontSize: 10, color: "var(--text-dim)", marginBottom: 5 }}>LOCATION METADATA</div>
               <div style={{ background: "var(--bg3)", padding: 15, border: "1px solid var(--border)" }}>
-                <div style={{ ...mono, fontSize: 13, color: "var(--text-bright)", marginBottom: 4 }}>{evidence.locationName}</div>
+                <div style={{ ...mono, fontSize: 13, color: "var(--text-bright)", marginBottom: 4 }}>SOURCE: {evidence.cameraLabel}</div>
                 <div style={{ ...mono, fontSize: 11, color: "var(--text-dim)" }}>LAT: {evidence.lat?.toFixed(6)}</div>
                 <div style={{ ...mono, fontSize: 11, color: "var(--text-dim)", marginBottom: 12 }}>LNG: {evidence.lng?.toFixed(6)}</div>
 
@@ -110,6 +133,15 @@ export default function EvidenceDetail({ evidence, onClose, onUpdate }: Props) {
               </div>
             </div>
 
+            {/* Responding Authority details */}
+            {evidence.authorityStation && (
+              <div style={{ background: "rgba(0,170,255,0.08)", border: "1px solid rgba(0,170,255,0.25)", padding: 12, ...mono, fontSize: 11 }}>
+                <div style={{ color: "var(--accent)", fontWeight: 700, marginBottom: 4 }}>👮 RESPONDING AUTHORITY</div>
+                <div style={{ color: "var(--text-bright)" }}>STATION: {evidence.authorityStation}</div>
+                {evidence.dispatchTime && <div style={{ color: "var(--text-dim)", fontSize: 10, marginTop: 2 }}>DISPATCHED AT: {evidence.dispatchTime}</div>}
+              </div>
+            )}
+
             {/* Authority Action Section */}
             <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
               {evidence.status === "Active" && (
@@ -117,11 +149,13 @@ export default function EvidenceDetail({ evidence, onClose, onUpdate }: Props) {
                   🚀 DISPATCH EMERGENCY RESPONSE
                 </button>
               )}
-              {evidence.status === "Police Dispatched" && (
+              {(evidence.status === "Police Dispatched" || evidence.status === "More Help Requested") && (
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={handleMoreHelp} style={{ flex: 1, background: "var(--warning)", color: "#000", border: "none", padding: "12px", fontWeight: 700, cursor: "pointer", ...mono }}>
-                    🆘 REQUEST MORE HELP
-                  </button>
+                  {evidence.status !== "More Help Requested" && (
+                    <button onClick={handleMoreHelp} style={{ flex: 1, background: "var(--warning)", color: "#000", border: "none", padding: "12px", fontWeight: 700, cursor: "pointer", ...mono }}>
+                      🆘 REQUEST MORE HELP
+                    </button>
+                  )}
                   <button onClick={handleResolve} style={{ flex: 1, background: "var(--accent)", color: "#000", border: "none", padding: "12px", fontWeight: 700, cursor: "pointer", ...mono }}>
                     ✅ MARK AS RESOLVED
                   </button>

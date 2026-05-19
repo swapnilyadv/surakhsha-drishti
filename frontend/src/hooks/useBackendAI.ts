@@ -105,6 +105,17 @@ export function useBackendAI() {
             return;
           }
 
+          // Handle global synchronized events from WebSocket channel
+          if (data.event === "dispatch_accepted") {
+            window.dispatchEvent(new CustomEvent("ws-dispatch-accepted", { detail: data }));
+          } else if (data.event === "need_more_help") {
+            window.dispatchEvent(new CustomEvent("ws-need-more-help", { detail: data }));
+          } else if (data.event === "evidence_resolved") {
+            window.dispatchEvent(new CustomEvent("ws-evidence-resolved", { detail: data }));
+          } else if (data.event === "violence_detected") {
+            window.dispatchEvent(new CustomEvent("ws-violence-detected", { detail: data }));
+          }
+
           if (data.type === "keepalive" || data === "pong") return;
           // Only update state if data actually changed (avoid re-renders)
           setDetection(prev => {

@@ -33,7 +33,6 @@ function load(): EvidenceEntry[] {
 }
 
 function save(items: EvidenceEntry[]) {
-  // strip thumbnails before saving to keep localStorage light
   try {
     const slim = items.map(({ thumbnail: _t, ...rest }) => rest);
     localStorage.setItem(KEY, JSON.stringify(slim));
@@ -44,12 +43,93 @@ export function useEvidenceStore() {
   const [evidence, setEvidence] = useState<EvidenceEntry[]>([]);
 
   useEffect(() => { 
-    const loaded = load();
-    if (loaded.length === 0) {
-      seedSampleEvidence();
-    } else {
-      setEvidence(loaded); 
+    // 1. Fetch initial persistent records from backend database
+    async function fetchFromBackend() {
+      try {
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8765";
+        const res = await fetch(`${backendUrl}/api/evidence`);
+        if (res.ok) {
+          const data: EvidenceEntry[] = await res.json();
+          // map relative URLs to absolute backend domain path
+          const mapped = data.map(item => ({
+            ...item,
+            videoUrl: item.videoUrl && item.videoUrl.startsWith("/") ? `${backendUrl}${item.videoUrl}` : item.videoUrl
+          }));
+          
+          const wasSeeded = localStorage.getItem("sd_seeded");
+          if (mapped.length > 0 || wasSeeded === "true") {
+            setEvidence(mapped);
+            save(mapped);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("Could not load evidence from backend database, using local cache fallback:", err);
+      }
+      
+      const loaded = load();
+      const wasSeeded = localStorage.getItem("sd_seeded");
+      if (loaded.length === 0 && wasSeeded !== "true") {
+        seedSampleEvidence();
+        localStorage.setItem("sd_seeded", "true");
+      } else {
+        setEvidence(loaded); 
+      }
     }
+    
+    fetchFromBackend();
+
+    // 2. Handle Real-Time WS State Synchronization
+    const handleWSDispatch = (e: CustomEvent) => {
+      const { evidence_id, station, officer } = e.detail;
+      setEvidence(prev => {
+        const next = prev.map(item => item.id === evidence_id ? {
+          ...item,
+          status: "Police Dispatched" as const,
+          authorityStation: station,
+          dispatchTime: new Date().toLocaleTimeString()
+        } : item);
+        save(next);
+        return next;
+      });
+    };
+
+    const handleWSHelp = (e: CustomEvent) => {
+      const { evidence_id, station, location } = e.detail;
+      setEvidence(prev => {
+        const next = prev.map(item => item.id === evidence_id ? {
+          ...item,
+          status: "More Help Requested" as const,
+          lat: location.lat,
+          lng: location.lng,
+          authorityStation: station
+        } : item);
+        save(next);
+        return next;
+      });
+    };
+
+    const handleWSResolve = (e: CustomEvent) => {
+      const { evidence_id } = e.detail;
+      setEvidence(prev => {
+        const next = prev.map(item => item.id === evidence_id ? {
+          ...item,
+          status: "Resolved" as const
+        } : item);
+        save(next);
+        return next;
+      });
+    };
+
+    window.addEventListener("ws-dispatch-accepted", handleWSDispatch as any);
+    window.addEventListener("ws-need-more-help", handleWSHelp as any);
+    window.addEventListener("ws-evidence-resolved", handleWSResolve as any);
+    
+    return () => {
+      window.removeEventListener("ws-dispatch-accepted", handleWSDispatch as any);
+      window.removeEventListener("ws-need-more-help", handleWSHelp as any);
+      window.removeEventListener("ws-evidence-resolved", handleWSResolve as any);
+    };
   }, []);
 
   function seedSampleEvidence() {
@@ -69,8 +149,7 @@ export function useEvidenceStore() {
         status: "Active",
         lat: 19.0760,
         lng: 72.8777,
-        locationName: "Local Tactical Unit (Webcam)",
-        videoUrl: `http://${host}:8000/api/stream/mjpeg?camera_id=CAM-01&quality=50`,
+        videoUrl: `http://${host}:8765/api/stream/mjpeg`,
         maleCount: 0,
         femaleCount: 0,
         weaponDetected: false,
@@ -86,8 +165,7 @@ export function useEvidenceStore() {
         status: "Active",
         lat: 19.0760,
         lng: 72.8777,
-        locationName: "Gateway of India Plaza",
-        videoUrl: undefined,
+        videoUrl: `http://${host}:8765/api/stream/mjpeg`,
         maleCount: 2,
         femaleCount: 1,
         weaponDetected: false,
@@ -100,15 +178,12 @@ export function useEvidenceStore() {
         isoTime: new Date(Date.now() - 3600000).toISOString(),
         confidence: 0.88,
         type: "WEAPON",
-        status: "Police Dispatched",
-        lat: 19.0820,
-        lng: 72.8890,
-        locationName: "Bandstand Promenade",
-        videoUrl: undefined,
+        status: "Active",
+        lat: 19.0500,
+        lng: 72.8300,
+        videoUrl: `http://${host}:8765/api/stream/mjpeg`,
         weaponDetected: true,
         weaponType: "Knife",
-        authorityStation: "Bandra West Station",
-        dispatchTime: new Date(Date.now() - 3000000).toLocaleTimeString(),
       }
     ];
     setEvidence(samples);
@@ -117,7 +192,7 @@ export function useEvidenceStore() {
 
   function addEvidence(entry: Partial<EvidenceEntry>) {
     const item: EvidenceEntry = {
-      id: `EVD-${Date.now()}`,
+      id: entry.id || `EVD-${Date.now()}`,
       cameraId: entry.cameraId || "unknown",
       cameraLabel: entry.cameraLabel || "Unknown Cam",
       timestamp: entry.timestamp || new Date().toLocaleTimeString(),
@@ -127,30 +202,84 @@ export function useEvidenceStore() {
       status: entry.status || "Active",
       lat: entry.lat || 19.0760, // Default to Mumbai Center if no GPS
       lng: entry.lng || 72.8777,
-      locationName: entry.locationName || "Tactical Unit Location",
-      videoUrl: entry.videoUrl || undefined, // Real recordings from MediaRecorder only
+      locationName: entry.locationName || "Gateway of India Plaza",
+      videoUrl: entry.videoUrl || undefined, 
       ...entry,
     } as EvidenceEntry;
 
     setEvidence(prev => {
-      const next = [item, ...prev];
+      const next = [item, ...prev.filter(x => x.id !== item.id)];
       save(next);
       return next;
     });
     return item;
   }
 
-  function clearAll() {
+  async function clearAll() {
     setEvidence([]);
     localStorage.removeItem(KEY);
+    localStorage.setItem("sd_seeded", "true");
+    
+    // Clear backend as well
+    try {
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8765";
+      await fetch(`${backendUrl}/api/evidence/clear`, { method: "POST" });
+    } catch {}
   }
 
-  function updateEvidence(id: string, updates: Partial<EvidenceEntry>) {
+  async function updateEvidence(id: string, updates: Partial<EvidenceEntry>) {
+    // 1. Optimistic UI update locally
     setEvidence(prev => {
       const next = prev.map(item => item.id === id ? { ...item, ...updates } : item);
       save(next);
       return next;
     });
+
+    // 2. Synchronize to Backend HTTP APIs
+    try {
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8765";
+      
+      if (updates.status === "Resolved") {
+        await fetch(`${backendUrl}/api/evidence/${id}/resolve`, { method: "POST" });
+      } else if (updates.status === "Police Dispatched") {
+        let stationName = updates.authorityStation || "Mumbai Police Station";
+        try {
+          const authStr = localStorage.getItem("sd_auth");
+          if (authStr) {
+            stationName = JSON.parse(authStr).user || stationName;
+          }
+        } catch {}
+
+        await fetch(`${backendUrl}/api/evidence/${id}/dispatch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            station: stationName,
+            officer: "Officer-" + Math.floor(Math.random() * 89 + 10)
+          })
+        });
+      } else if (updates.status === "More Help Requested") {
+        let stationName = updates.authorityStation || "Mumbai Police Station";
+        try {
+          const authStr = localStorage.getItem("sd_auth");
+          if (authStr) {
+            stationName = JSON.parse(authStr).user || stationName;
+          }
+        } catch {}
+
+        await fetch(`${backendUrl}/api/evidence/${id}/escalate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            station: stationName,
+            lat: updates.lat || 19.0760,
+            lng: updates.lng || 72.8777
+          })
+        });
+      }
+    } catch (err) {
+      console.warn("Failed to synchronize state update with backend API:", err);
+    }
   }
 
   return { evidence, addEvidence, clearAll, updateEvidence, seedSampleEvidence };
