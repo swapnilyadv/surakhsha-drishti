@@ -46,7 +46,7 @@ export default function EvidenceDetail({ evidence, onClose, onUpdate }: Props) {
     });
   };
 
-  const googleMapsUrl = `https://www.google.com/maps?q=${evidence.lat},${evidence.lng}`;
+  const googleMapsUrl = `https://maps.google.com/?q=${evidence.lat},${evidence.lng}`;
 
   return (
     <motion.div
@@ -98,17 +98,62 @@ export default function EvidenceDetail({ evidence, onClose, onUpdate }: Props) {
           </div>
 
           {/* Right Side: Data */}
-          <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 20 }}>
-            {/* Status Badge */}
-            <div style={{ padding: "10px 15px", background: (evidence.status || "Active") === "Active" ? "rgba(255,34,68,0.15)" : "rgba(0,255,170,0.15)", border: `1px solid ${(evidence.status || "Active") === "Active" ? "var(--danger)" : "var(--accent)"}`, color: (evidence.status || "Active") === "Active" ? "var(--danger)" : "var(--accent)", ...mono, fontSize: 12, textAlign: "center", fontWeight: 700, letterSpacing: 2 }}>
-              STATUS: {(evidence.status || "Active").toUpperCase()}
+          <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Status and Threat Level Badges */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ padding: "10px", background: (evidence.status || "Active") === "Active" ? "rgba(255,34,68,0.15)" : "rgba(0,255,170,0.15)", border: `1px solid ${(evidence.status || "Active") === "Active" ? "var(--danger)" : "var(--accent)"}`, color: (evidence.status || "Active") === "Active" ? "var(--danger)" : "var(--accent)", ...mono, fontSize: 11, textAlign: "center", fontWeight: 700, letterSpacing: 1 }}>
+                STATUS: {(evidence.status || "Active").toUpperCase()}
+              </div>
+
+              {/* Dynamic Threat Level Badge */}
+              <div style={{
+                padding: "10px",
+                background: evidence.type?.includes("CRITICAL") || evidence.type?.includes("Fighting") ? "rgba(255,0,0,0.2)" : evidence.type?.includes("HIGH") ? "rgba(255,100,0,0.15)" : "rgba(0,255,170,0.1)",
+                border: `1px solid ${evidence.type?.includes("CRITICAL") || evidence.type?.includes("Fighting") ? "#ff3333" : evidence.type?.includes("HIGH") ? "#ff8800" : "var(--accent)"}`,
+                color: evidence.type?.includes("CRITICAL") || evidence.type?.includes("Fighting") ? "#ff3333" : evidence.type?.includes("HIGH") ? "#ffaa00" : "var(--accent)",
+                ...mono,
+                fontSize: 11,
+                textAlign: "center",
+                fontWeight: 700,
+                letterSpacing: 1
+              }}>
+                LEVEL: {evidence.type?.toUpperCase().replace("[", "").replace("]", "") || "TACTICAL"}
+              </div>
+            </div>
+
+            {/* Incident Metadata */}
+            <div>
+              <div style={{ ...mono, fontSize: 10, color: "var(--text-dim)", marginBottom: 5 }}>INCIDENT METADATA</div>
+              <div style={{ background: "var(--bg3)", padding: 15, border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ ...mono, fontSize: 12, color: "var(--text-bright)", display: "flex", justifyContent: "space-between" }}>
+                  <span>THREAT CLASSIFICATION:</span>
+                  <span style={{ color: "var(--danger)", fontWeight: 700 }}>{evidence.type || "VIOLENCE"}</span>
+                </div>
+                <div style={{ ...mono, fontSize: 12, color: "var(--text-bright)", display: "flex", justifyContent: "space-between" }}>
+                  <span>AGGRESSION SCORE:</span>
+                  <span style={{ color: "var(--warning)", fontWeight: 700 }}>{(evidence.confidence * 100).toFixed(0)}%</span>
+                </div>
+                <div style={{ ...mono, fontSize: 12, color: "var(--text-bright)", display: "flex", justifyContent: "space-between" }}>
+                  <span>RECORDING DURATION:</span>
+                  <span style={{ color: "var(--accent)", fontWeight: 700 }}>{evidence.duration || "15 sec"}</span>
+                </div>
+                <div style={{ ...mono, fontSize: 12, color: "var(--text-bright)", display: "flex", justifyContent: "space-between" }}>
+                  <span>CAPTURED TIME:</span>
+                  <span style={{ color: "var(--text)", fontWeight: 700 }}>{evidence.timestamp}</span>
+                </div>
+                {evidence.isoTime && (
+                  <div style={{ ...mono, fontSize: 10, color: "var(--text-dim)", borderTop: "1px solid var(--border)", paddingTop: 8, marginTop: 4 }}>
+                    OCCURRED: {new Date(evidence.isoTime).toLocaleString("en-IN")}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Location */}
             <div>
               <div style={{ ...mono, fontSize: 10, color: "var(--text-dim)", marginBottom: 5 }}>LOCATION METADATA</div>
               <div style={{ background: "var(--bg3)", padding: 15, border: "1px solid var(--border)" }}>
-                <div style={{ ...mono, fontSize: 13, color: "var(--text-bright)", marginBottom: 4 }}>SOURCE: {evidence.cameraLabel}</div>
+                <div style={{ ...mono, fontSize: 13, color: "var(--text-bright)", marginBottom: 4 }}>SOURCE: {evidence.cameraLabel} <span style={{ color: "var(--text-dim)", fontSize: 10 }}>({evidence.cameraId})</span></div>
                 <div style={{ ...mono, fontSize: 11, color: "var(--text-dim)" }}>LAT: {evidence.lat?.toFixed(6)}</div>
                 <div style={{ ...mono, fontSize: 11, color: "var(--text-dim)", marginBottom: 12 }}>LNG: {evidence.lng?.toFixed(6)}</div>
 

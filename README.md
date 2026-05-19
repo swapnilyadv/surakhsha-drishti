@@ -22,39 +22,55 @@ Suraksha Drishti is a real-world, high-performance tactical surveillance platfor
 
 ---
 
-## 🛠️ Complete Work Completed & Features Implemented
+## 🛠️ Complete Work Completed & Features Implemented (v5.0 Upgraded)
 
-### 1. 📹 Thread-Safe Rolling Buffers & Auto-Recording System
-*   Implemented a rolling buffer queue (`collections.deque`) capturing the preceding **5 seconds** of camera history at 20 FPS (prevents losing vital context leading up to an incident).
-*   Enforces a **minimum recording duration of 15 seconds** per threat.
-*   Employs a **5-second cooldown** buffer: if violence ceases, recording continues for 5 seconds to ensure temporal continuity and prevent clipping/flickering.
-*   All frame writing operates asynchronously on a background worker thread queue (`queue.Queue`) to prevent model inference lag.
+### 1. 🧠 Upgraded Temporal Violence Engine (v6.0 Close-Combat Grappling Upgraded)
+*   **Wrestling, Grappling & Choking Support**: Incorporates state-of-the-art proximity, torso-overlap, and body-acceleration algorithms to automatically classify physical combat even in the absence of visible punch gestures.
+*   **Person-Count & Separation Independence**: Violence and close-combat aggression heuristics will successfully trigger even when overlapping bodies are merged by YOLOv8 into a single tracked bounding box (`person_count = 1`).
+*   **Hybrid Weighted Aggression Scoring**: Uses robust mathematical heuristic layers matching attacker wrist velocities, centroid accelerations, relative head proximities, and body jitter rates:
+    - *Chaotic Motion*: **+40 points**
+    - *Repeated Arm Strikes*: **+35 points**
+    - *Skeleton Overlap*: **+30 points**
+    - *Temporal Model Confidence*: **+40 points**
+    - *Close Proximity Aggression*: **+15 points**
+    - *Wrist Collision / Strikes*: **+15 points**
+    - *Victim Recoil / Momentum*: **+10 points**
+    - *Close Combat / Grappling Boost*: **+25 points**
+*   **Aggression Override Mode**: If temporal confidence is elevated or chaotic motion is high, and rapid arm speeds are active, the threat forces **HIGH/CRITICAL** (minimum score of `75`) bypassing exact strike rules.
+*   **30-Frame Sliding Window**: Replaced single-frame landmark analysis with a continuous 30-frame (~1.5s) temporal trajectory window storing joint vectors, bounding coordinates, and pixel differences.
+*   **Joint Velocity Trackers**: Extracts kinematic velocity rates of elbows, wrists, and ankles to isolate flailing combat gestures.
+*   **Repeated Arm Strike Cycle Counter**: Counts mathematical extrema velocity wave peaks. If 3 or more high-speed peaks occur within a sliding interval, flags a flailing strike pattern (punching fights).
+*   **Centroid Fall Detection**: Tracks downward vertical velocity drop spikes in the body centroid. If followed by deceleration, flags a post-impact collapse/fall event.
+*   **Suspicious Running & Chasing Tracker**: Measures shifts in relative centroid distances over 5-frame windows. If distance between two targets converges rapidly while velocity is high, flags aggressive chasing.
+*   **Crowd Aggression Estimator**: Computes overlapping bounding boxes coupled with elevated motion pixel differences.
 
-### 2. ⚡ Asynchronous FFmpeg H264 Transcoding Pipeline
-*   OpenCV's native `VideoWriter` outputs raw non-web-playable `mp4v` codec frames.
-*   Once recording stops, the system spawns a background thread system call to **`ffmpeg`** at `/opt/homebrew/bin/ffmpeg` to transcode the video into a standard HTML5 **H264/AVC** stream.
-*   Serves playable `.mp4` files statically from `/recordings/`, enabling real-time playback inside the frontend modal and direct downloads.
+### 2. 📊 Dynamic Threat Scoring Engine (Phase 2)
+*   Computes a real-time weighted threat index between `0.0` and `1.0`:
+    $$\text{Score} = (\text{Aggression} \times 0.40) + (\text{Weapon Conf} \times 0.35) + (\text{Motion Intensity} \times 0.15) + (\text{Crowd Density} \times 0.10) + \text{Event Boosts}$$
+*   Applies dynamic boosts for specialized gestures (+15% for repeated arm strikes, +10% for falls, +12% for aggressive chasing).
+*   Categorizes threats into distinct levels: `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL`.
 
-### 3. 💾 Persistent Evidence Vault
-*   Replaced in-memory states with a persistent database file (`backend/recordings/evidence_db.json`) that survives server restarts.
-*   **Peak Stat Accumulator**: Dynamically logs peak gender counts (male/female classifications), weapon detections, highest confidence levels, and active GPS coordinates for Google Maps routing.
+### 3. 📹 Smart Recording Pipeline & Incident Merging (Phase 3)
+*   **5-Second Pre-Event Buffer**: Maintains a thread-safe rolling queue of raw images so recordings capture the exact precursor to threat triggers.
+*   **10-Second Incident Merging**: Re-detections within 10 seconds of stopping will bypass the cooldown and append frames to the *same* active evidence clip, preventing fragmented files.
+*   **Minimum Duration Lock**: Holds the video writer active for at least 15 seconds to ensure evidence clarity.
+*   **Asynchronous FFmpeg Queue**: Spawns transcoding subprocesses inside a background thread pool (preset `ultrafast` at 2 threads) to prevent CPU core saturation.
 
-### 4. 🔗 Dynamic Responding Authority Dispatching
-*   Added a safe double-dispatch lock inside `DispatchManager` to prevent multiple police stations from accepting the same incident.
-*   Replaced hardcoded dispatch names by dynamically reading the logged-in user session metadata (`localStorage.getItem("sd_auth")`). Clicking **DISPATCH** now registers the actual, real station name (e.g., *"Bandra West Station"*) and timestamps the action.
+### 4. ⚡ CPU Performance Safeguards & Adaptive Skipping (Phase 4)
+*   **Adaptive skipping**: Dynamically adjusts frame sampling step (`AI_EVERY_N_FRAMES`) between 4 and 10 based on measured inference latency to prevent CPU thread lockups on MacBook Air hardware.
+*   **Sub-scale preprocessing**: Resizes raw frames before heavy classifier feeds to preserve memory bandwidth.
 
-### 5. 🆘 Tactical Emergency Escalations ("Need More Help")
-*   Clicking **REQUEST MORE HELP** on a dispatched incident locks the state, alerts cooperating divisions, and forcefully re-loops the audio alert sound globally on all station terminals.
-*   Synchronizes active coordinates dynamically for rapid tactical dispatch mapping.
+### 5. 👮 Responding Authority & Real-Time Dispatches
+*   Double-dispatch lock prevents overlapping accept operations.
+*   Reads logged-in operator metadata (`localStorage.getItem("sd_auth")`) to dynamically query and log responding stations (e.g., *"Bandra Station"*) rather than rendering static text templates.
 
-### 6. 🧹 Clean Evidences & Reload Persistence
-*   Addressed a loader bug: clearing the dashboard now correctly stores an `sd_seeded` flag in local storage.
-*   Upon refresh, the system remembers that the operator explicitly cleared all cards, preventing sample mock cards from re-seeding.
+### 6. 🧹 Clear Evidences & Reload Persistence
+*   Dashboard clearing persists an `sd_seeded` flag in local storage, preventing sample mock cards from re-seeding on page refreshes.
 
-### 7. 📺 Dynamic Media Element Player
-*   Configured the detail player modal to distinguish between MJPEG live feeds and transcoded clips. 
-*   **MJPEG stream**: Renders inside a responsive `<img src="..." />` element so AI camera coordinate bounding overlays play dynamically in real-time.
-*   **Clips**: Renders inside `<video controls />` for perfect playback, scanning, and downloading.
+### 7. 📺 Dynamic HUD Overlay & Events Timeline (Phase 6)
+*   **MJPEG Overlays**: Renders live video feeds inside standard responsive `<img>` elements for real-time bounding box visualization.
+*   **Surveillance Activity Log**: Integrates a live-updating visual event logging dashboard component by periodically querying our new `/api/events/timeline` REST API.
+*   **Dynamic Pulse Display**: Renders glowing dark-mode indicators that change pulse frequencies and colors (cyan, yellow, orange, bright red) relative to the active threat state.
 
 ---
 

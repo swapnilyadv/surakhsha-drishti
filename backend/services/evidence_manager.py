@@ -6,14 +6,14 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from services.recording_manager import RecordingManager
+from services.recording_pipeline import RecordingPipeline
 
 logger = logging.getLogger("suraksha.evidence")
 
 class EvidenceManager:
     """
     Evidence Vault & Persistent Database Manager.
-    - Delegates core frame capture and asynchronous H264 conversion to RecordingManager.
+    - Delegates core frame capture and asynchronous H264 conversion to RecordingPipeline.
     - Synchronizes incident metadata in evidence_db.json.
     - Tracks male/female counts, weapon presence, location coordinates, and alerts.
     """
@@ -24,7 +24,7 @@ class EvidenceManager:
         self.db_path = self.output_dir / "evidence_db.json"
         
         # Lower-level rolling queue and OpenCV writer sub-system
-        self.recording_manager = RecordingManager(output_dir, fps, pre_buffer_seconds)
+        self.recording_manager = RecordingPipeline(output_dir, fps, pre_buffer_seconds)
         
         self.history = []
         self._lock = threading.Lock()
@@ -39,6 +39,8 @@ class EvidenceManager:
         self.active_weapon_detected = False
         self.active_weapon_type = "None"
         self.active_max_confidence = 0.0
+        self.active_lat = 19.0760
+        self.active_lng = 72.8777
         
         self.start_time = 0.0
         self.last_threat_time = 0.0
@@ -81,7 +83,7 @@ class EvidenceManager:
         except Exception as e:
             logger.error(f"[Evidence] Database save error: {e}")
 
-    def add_frame(self, frame, is_threat: bool, threat_type: str = "VIOLENCE", camera_id: str = "CAM-01", camera_label: str = "Webcam Unit", male_count: int = 0, female_count: int = 0, weapon_detected: bool = False, weapon_type: str = "None", confidence: float = 0.0):
+    def add_frame(self, frame, is_threat: bool, threat_type: str = "VIOLENCE", camera_id: str = "CAM-01", camera_label: str = "Webcam Unit", male_count: int = 0, female_count: int = 0, weapon_detected: bool = False, weapon_type: str = "None", confidence: float = 0.0, lat: float = 19.0760, lng: float = 72.8777):
         """
         Accepts frame inputs from pipeline.
         - Pipelines frames to rolling buffer.
@@ -108,6 +110,8 @@ class EvidenceManager:
             if not self.is_recording and is_threat:
                 self.active_camera_id = camera_id
                 self.active_camera_label = camera_label
+                self.active_lat = lat
+                self.active_lng = lng
                 self.start_time = time.time()
                 
                 # Reset peaks
@@ -119,7 +123,7 @@ class EvidenceManager:
                 
                 h, w = frame.shape[:2]
                 self.recording_manager.start_recording(w, h, camera_id)
-                logger.info(f"[Evidence] Threat trigger registered. Active recording initiated for camera {camera_id}.")
+                logger.info(f"[Evidence] Threat trigger registered. Active recording initiated for camera {camera_id} at ({lat}, {lng}).")
 
     def update_lifecycle(self) -> dict | None:
         """
@@ -158,15 +162,6 @@ class EvidenceManager:
         if not final_file:
             return None
         
-        # Real-world Mumbai coordinates lookup based on Camera ID for Google Maps positioning
-        CAMERA_LOCATIONS = {
-            "CAM-0": {"lat": 19.0760, "lng": 72.8777},
-            "CAM-01": {"lat": 19.0760, "lng": 72.8777},
-            "CAM-02": {"lat": 19.0500, "lng": 72.8300},
-            "CAM-03": {"lat": 19.0820, "lng": 72.8890},
-        }
-        loc_data = CAMERA_LOCATIONS.get(self.active_camera_id, {"lat": 19.0760, "lng": 72.8777})
-        
         ev_id = f"EVD-REC-{int(time.time())}"
         timestamp_label = datetime.now().strftime("%I:%M %p")
         iso_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -183,8 +178,8 @@ class EvidenceManager:
             "status": "Active",
             "duration": f"{duration} sec",
             "locationName": self.active_camera_label,
-            "lat": loc_data["lat"],
-            "lng": loc_data["lng"],
+            "lat": float(self.active_lat),
+            "lng": float(self.active_lng),
             "maleCount": int(self.active_max_male),
             "femaleCount": int(self.active_max_female),
             "weaponDetected": bool(self.active_weapon_detected),

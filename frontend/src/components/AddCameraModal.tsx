@@ -62,11 +62,30 @@ export default function AddCameraModal({ onAdd, onClose }: Props) {
   }
 
   async function submit() {
-    if (activeTab !== "upload" && !label.trim()) { setError("Label is required"); return; }
+    if (!label.trim() && activeTab !== "upload") { setError("Label is required"); return; }
     
     if (activeTab === "cctv") {
       if (!url.trim()) { setError("Stream URL is required for CCTV"); return; }
       if (!lat || !lng) { setError("Location is required for CCTV"); return; }
+    }
+
+    // Resolve dynamic uploader location inheritance (Task 7)
+    let finalLat = lat ? parseFloat(lat) : undefined;
+    let finalLng = lng ? parseFloat(lng) : undefined;
+
+    if (!finalLat || !finalLng) {
+      try {
+        const res = await fetch("https://ip-api.com/json/?fields=lat,lon,status");
+        const data = await res.json();
+        if (data.status === "success") {
+          finalLat = parseFloat(data.lat.toFixed(6));
+          finalLng = parseFloat(data.lon.toFixed(6));
+        }
+      } catch {}
+      if (!finalLat || !finalLng) {
+        finalLat = 19.0760;
+        finalLng = 72.8777;
+      }
     }
 
     if (activeTab === "upload") {
@@ -98,6 +117,8 @@ export default function AddCameraModal({ onAdd, onClose }: Props) {
               type: "upload",
               label: finalLabel,
               status: "active",
+              lat: finalLat,
+              lng: finalLng,
             });
             onClose();
           } else {
@@ -130,8 +151,8 @@ export default function AddCameraModal({ onAdd, onClose }: Props) {
       label: label.trim(),
       url: activeTab === "cctv" ? url.trim() : undefined,
       status: "active",
-      lat: lat ? parseFloat(lat) : undefined,
-      lng: lng ? parseFloat(lng) : undefined,
+      lat: finalLat,
+      lng: finalLng,
     });
     onClose();
   }
@@ -149,7 +170,7 @@ export default function AddCameraModal({ onAdd, onClose }: Props) {
       <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
         style={{ width: 500, background: "var(--bg2)", border: "1px solid var(--border-glow)", padding: 28, position: "relative", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 0 50px rgba(0,0,0,0.5)" }}>
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
+         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
           <div style={{ fontFamily: "Orbitron,sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 3, color: "var(--accent)" }}>
             📡 CONNECT SOURCE
           </div>
@@ -167,9 +188,7 @@ export default function AddCameraModal({ onAdd, onClose }: Props) {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          {activeTab !== "upload" && (
-            <Field label="Identification Label" value={label} onChange={setLabel} placeholder={activeTab === "cctv" ? "e.g. Platform CCTV-01" : "e.g. Mobile Unit Alpha"} />
-          )}
+          <Field label="Identification Label" value={label} onChange={setLabel} placeholder={activeTab === "cctv" ? "e.g. Platform CCTV-01" : activeTab === "webcam" ? "e.g. Mobile Unit Alpha" : "e.g. Uploaded Clip Alpha"} />
           
           {activeTab === "cctv" && (
             <div>
@@ -225,27 +244,25 @@ export default function AddCameraModal({ onAdd, onClose }: Props) {
             </div>
           )}
 
-          {activeTab !== "upload" && (
-            <div>
-              <div style={{ ...mono, fontSize: 9, color: "var(--text-dim)", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 }}>Geolocation Bind</div>
-              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                <input value={lat} onChange={e => setLat(e.target.value)} placeholder="Lat"
-                  style={{ flex: 1, background: "rgba(0,100,200,0.06)", border: "1px solid var(--border)", color: "var(--text-bright)", ...mono, fontSize: 12, padding: "8px 10px", outline: "none" }}/>
-                <input value={lng} onChange={e => setLng(e.target.value)} placeholder="Lng"
-                  style={{ flex: 1, background: "rgba(0,100,200,0.06)", border: "1px solid var(--border)", color: "var(--text-bright)", ...mono, fontSize: 12, padding: "8px 10px", outline: "none" }}/>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={getIPLocation} disabled={ipLoading}
-                  style={{ flex: 1, ...mono, fontSize: 9, background: "transparent", border: "1px solid var(--border)", color: "var(--text-dim)", padding: "7px", cursor: "pointer" }}>
-                  {ipLoading ? "..." : "IP LOCATE"}
-                </button>
-                <button onClick={getDeviceGPS} disabled={gpsLoading}
-                  style={{ flex: 1, ...mono, fontSize: 9, background: "transparent", border: "1px solid var(--border)", color: "var(--text-dim)", padding: "7px", cursor: "pointer" }}>
-                  {gpsLoading ? "..." : "DEVICE GPS"}
-                </button>
-              </div>
+          <div>
+            <div style={{ ...mono, fontSize: 9, color: "var(--text-dim)", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 }}>Geolocation Bind</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <input value={lat} onChange={e => setLat(e.target.value)} placeholder="Lat"
+                style={{ flex: 1, background: "rgba(0,100,200,0.06)", border: "1px solid var(--border)", color: "var(--text-bright)", ...mono, fontSize: 12, padding: "8px 10px", outline: "none" }}/>
+              <input value={lng} onChange={e => setLng(e.target.value)} placeholder="Lng"
+                style={{ flex: 1, background: "rgba(0,100,200,0.06)", border: "1px solid var(--border)", color: "var(--text-bright)", ...mono, fontSize: 12, padding: "8px 10px", outline: "none" }}/>
             </div>
-          )}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={getIPLocation} disabled={ipLoading}
+                style={{ flex: 1, ...mono, fontSize: 9, background: "transparent", border: "1px solid var(--border)", color: "var(--text-dim)", padding: "7px", cursor: "pointer" }}>
+                {ipLoading ? "..." : "IP LOCATE"}
+              </button>
+              <button onClick={getDeviceGPS} disabled={gpsLoading}
+                style={{ flex: 1, ...mono, fontSize: 9, background: "transparent", border: "1px solid var(--border)", color: "var(--text-dim)", padding: "7px", cursor: "pointer" }}>
+                {gpsLoading ? "..." : "DEVICE GPS"}
+              </button>
+            </div>
+          </div>
 
           {error && <div style={{ ...mono, fontSize: 10, color: "var(--danger)", textAlign: "center" }}>⚠ {error}</div>}
           

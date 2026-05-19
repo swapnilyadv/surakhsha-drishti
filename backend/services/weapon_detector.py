@@ -124,10 +124,23 @@ class WeaponDetector:
         if not self.loaded or self.session is None:
             return self._empty_result()
 
+        if frame is None or frame.size == 0 or len(frame.shape) < 3 or frame.shape[0] == 0 or frame.shape[1] == 0:
+            logger.warning("[WeaponDetector] Null/Empty frame received.")
+            return self._empty_result()
+
         t0 = time.perf_counter()
 
         try:
             blob, scale_x, scale_y, pad_x, pad_y = self._preprocess_letterbox(frame)
+            
+            # ONNX input tensor validation
+            if blob is None or not isinstance(blob, np.ndarray):
+                raise ValueError("Preprocessed ONNX input is not a valid numpy array")
+            if not np.isfinite(blob).all():
+                raise ValueError("ONNX input tensor contains infinite or NaN values")
+            if len(blob.shape) != 4 or blob.shape[0] != 1 or blob.shape[1] != 3:
+                raise ValueError(f"ONNX input tensor shape {blob.shape} is invalid")
+
             outputs = self.session.run(None, {self.input_name: blob})
             detections = self._postprocess(outputs, scale_x, scale_y, pad_x, pad_y, frame.shape)
 

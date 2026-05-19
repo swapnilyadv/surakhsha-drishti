@@ -32,6 +32,16 @@ export interface BackendDetection {
   recording?: boolean;
   alarm_active?: boolean;
   event?: string;
+
+  // Upgraded temporal metrics
+  threat_level?: string;
+  threat_score?: number;
+  fall_detected?: boolean;
+  repeated_strikes?: boolean;
+  chasing_detected?: boolean;
+  motion_intensity?: number;
+  action?: string;
+  fps?: number;
 }
 
 const DEFAULT_STATE: BackendDetection = {
@@ -49,6 +59,14 @@ const DEFAULT_STATE: BackendDetection = {
   recording: false,
   alarm_active: false,
   event: "NOMINAL",
+  threat_level: "LOW",
+  threat_score: 0.0,
+  fall_detected: false,
+  repeated_strikes: false,
+  chasing_detected: false,
+  motion_intensity: 0.0,
+  action: "Normal",
+  fps: 20,
 };
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8765/ws/detections";
@@ -126,7 +144,13 @@ export function useBackendAI() {
               prev.violence_confidence !== data.violence_confidence ||
               prev.male_count !== data.male_count ||
               prev.recording !== data.recording ||
-              prev.alarm_active !== data.alarm_active;
+              prev.alarm_active !== data.alarm_active ||
+              prev.threat_level !== data.threat_level ||
+              prev.fall_detected !== data.fall_detected ||
+              prev.repeated_strikes !== data.repeated_strikes ||
+              prev.chasing_detected !== data.chasing_detected ||
+              prev.action !== data.action ||
+              prev.fps !== data.fps;
             return changed ? { ...DEFAULT_STATE, ...data } : prev;
           });
         } catch {

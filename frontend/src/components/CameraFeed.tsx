@@ -32,6 +32,8 @@ interface Props {
     violence_detected: boolean;
     violence_label: string;
     violence_confidence: number;
+    threat_level?: string;
+    motion_intensity?: number;
   } | null;
 }
 
@@ -56,6 +58,7 @@ const CameraFeed = memo(function CameraFeed({
   const isRecordingRef      = useRef(false);
   const recordingTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countIntervalRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const alarmAudioRef       = useRef<HTMLAudioElement | null>(null);
   const prevViolenceRef     = useRef(false);
   const detectionSnapshotRef = useRef<typeof backendDetection | null>(null);
 
@@ -72,12 +75,37 @@ const CameraFeed = memo(function CameraFeed({
     const base = camera.type === "cctv" ? camera.url : MJPEG_URL;
     if (!base) return;
     const separator = base.includes("?") ? "&" : "?";
-    setStreamSrc(`${base}${separator}camId=${camera.id}&t=${Date.now()}`);
-  }, [camera.id, camera.type, camera.url]);
+    const latStr = camera.lat !== undefined ? `&lat=${camera.lat}` : "";
+    const lngStr = camera.lng !== undefined ? `&lng=${camera.lng}` : "";
+    const labelStr = camera.label ? `&label=${encodeURIComponent(camera.label)}` : "";
+    setStreamSrc(`${base}${separator}camId=${camera.id}&t=${Date.now()}${latStr}${lngStr}${labelStr}`);
+  }, [camera.id, camera.type, camera.url, camera.lat, camera.lng, camera.label]);
 
   const isWeaponAlert   = backendDetection?.weapon_detected   ?? false;
   const isViolenceAlert = backendDetection?.violence_detected ?? false;
   const isAnyAlert      = isWeaponAlert || isViolenceAlert;
+
+  // Auto-play client-side looping alarm
+  useEffect(() => {
+    if (isViolenceAlert) {
+      if (!alarmAudioRef.current) {
+        alarmAudioRef.current = new Audio("/sound/alarm.wav");
+        alarmAudioRef.current.loop = true;
+      }
+      alarmAudioRef.current.play().catch(e => console.log("[CameraFeed] Audio play delayed until gesture:", e));
+    } else {
+      if (alarmAudioRef.current) {
+        alarmAudioRef.current.pause();
+        alarmAudioRef.current.currentTime = 0;
+      }
+    }
+    return () => {
+      if (alarmAudioRef.current) {
+        alarmAudioRef.current.pause();
+        alarmAudioRef.current.currentTime = 0;
+      }
+    };
+  }, [isViolenceAlert]);
 
   // ── 1. Load face-api models ───────────────────────────────────────────────
   useEffect(() => {
@@ -236,6 +264,12 @@ const CameraFeed = memo(function CameraFeed({
     };
   }, [stopRecording]);
 
+  // Keep dynamic ref of backend detection payload to use inside detectLoop without rebuilding
+  const backendDetectionRef = useRef(backendDetection);
+  useEffect(() => {
+    backendDetectionRef.current = backendDetection;
+  }, [backendDetection]);
+
   // ── 4. Gender AI Loop ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!modelsReady) return;
@@ -253,7 +287,24 @@ const CameraFeed = memo(function CameraFeed({
       if (stopped) return;
       const now = Date.now();
 
-      if (now - lastRunRef.current >= GENDER_INTERVAL_MS) {
+      const detState = backendDetectionRef.current;
+      const isHighMotion = isAnyAlert || 
+        detState?.threat_level === "HIGH" || 
+        detState?.threat_level === "CRITICAL" || 
+        detState?.violence_detected ||
+        (detState?.motion_intensity ?? 0) > 0.55;
+
+      // During active violence/high threat scenes, skip face analysis completely to optimize CPU resources
+      if (isHighMotion) {
+        cx.clearRect(0, 0, c.width, c.height); // clear face boxes quickly to avoid ghosting
+        rafRef.current = requestAnimationFrame(detectLoop);
+        return;
+      }
+
+      // Reduce frequency under moderate threat scenes (2000ms instead of 600ms)
+      const currentInterval = detState?.threat_level === "MEDIUM" ? 2000 : GENDER_INTERVAL_MS;
+
+      if (now - lastRunRef.current >= currentInterval) {
         const source = camera.type === "webcam"
           ? hiddenVideoRef.current
           : camera.type === "upload"
@@ -300,7 +351,7 @@ const CameraFeed = memo(function CameraFeed({
     }
     detectLoop();
     return () => { stopped = true; cancelAnimationFrame(rafRef.current); };
-  }, [modelsReady, camera.type, onGenderUpdate]);
+  }, [modelsReady, camera.type, onGenderUpdate, isAnyAlert]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -402,11 +453,30 @@ const CameraFeed = memo(function CameraFeed({
         {isAnyAlert && (
           <div style={{
             position: "absolute",
+            inset: 0,
+            border: "3px solid rgba(220,38,38,0.85)",
+            boxShadow: "inset 0 0 30px rgba(220,38,38,0.6)",
+            animation: "pulseGlow 1.2s infinite alternate",
+            pointerEvents: "none",
+            zIndex: 15
+          }} />
+        )}
+
+        <style>{`
+          @keyframes pulseGlow {
+            from { box-shadow: inset 0 0 15px rgba(220,38,38,0.4); border-color: rgba(220,38,38,0.6); }
+            to { box-shadow: inset 0 0 35px rgba(220,38,38,0.95); border-color: rgba(220,38,38,1); }
+          }
+        `}</style>
+
+        {isAnyAlert && (
+          <div style={{
+            position: "absolute",
             top: 0,
             left: 0,
             right: 0,
             zIndex: 20,
-            background: "rgba(220,38,38,0.85)",
+            background: "rgba(220,38,38,0.9)",
             color: "#fff",
             fontSize: 10,
             padding: "6px 0",
@@ -416,7 +486,7 @@ const CameraFeed = memo(function CameraFeed({
             letterSpacing: 2,
             textTransform: "uppercase"
           }}>
-            ⚠ {isWeaponAlert ? "WEAPON DETECTED" : "VIOLENCE DETECTED"}
+            ⚠ {isWeaponAlert ? "WEAPON DETECTED" : `VIOLENCE DETECTED (${Math.round((backendDetection?.violence_confidence || 0.90) * 100)}%)`}
           </div>
         )}
 

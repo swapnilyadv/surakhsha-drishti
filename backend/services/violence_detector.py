@@ -1,139 +1,182 @@
 """
 Violence Detector Service
 ==========================
-Primary model: HuggingFace ViT  — jaranohaal/vit-base-violence-detection
-                                  (binary: Violence vs Non-Violence)
-
-Enhanced in v4.0:
-  - Richer output: action_label, aggression_score, action enum
-  - Pose-context fusion: if pose estimator detected high aggression,
-    this is factored into the final confidence (no false-safe)
-  - Strict rate limiting (0.5s interval) + result caching
-  - Graceful fallback when model unavailable
-
-Output dict:
-  {
-    "violence_detected": bool,
-    "confidence": float,          # 0.0–1.0
-    "label": str,                 # raw model label
-    "action": str,                # "Fighting" | "Aggressive" | "Normal" | etc.
-    "aggression_score": float,    # 0.0–1.0 fused with pose data
-  }
+Enhanced in v5.0:
+  - Custom ONNX Temporal Model integration (MobileNetV3 + GRU).
+  - 16-frame sliding sequence history window.
+  - 5-step prediction probability smoothing.
+  - Hysteresis triggering: threshold boundary high (0.75) to alert, low (0.35) to clear.
+  - Kinematics joint-velocity context blending.
+  - Zero-downtime graceful fallback to HuggingFace ViT + pose engine when custom ONNX model is compiling.
 """
 
 import time
 import logging
-
+import os
 import cv2
 import numpy as np
+import collections
 from PIL import Image
 
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-INFERENCE_INTERVAL   = 0.5    # minimum seconds between ViT inferences
-VIOLENCE_CONFIDENCE_THRESHOLD = 0.58   # min confidence to declare violence
+ONNX_MODEL_PATH = "/Users/swapnil/Desktop/my project/surakhsha-drishti/backend/models/violence_model.onnx"
+INFERENCE_INTERVAL = 0.15          # Fast 150ms temporal sequence interval
+VIOLENCE_CONFIDENCE_THRESHOLD = 0.58
 MODEL_NAME = "jaranohaal/vit-base-violence-detection"
 
-# Action label mapping based on violence confidence + pose aggression
-def _map_action(violence_detected: bool, vit_conf: float, pose_agg: float) -> str:
-    """Derive human-readable action label from model outputs."""
-    if not violence_detected:
-        if pose_agg > 0.5:
-            return "Suspicious"
-        return "Normal"
-    if vit_conf > 0.85 or pose_agg > 0.8:
-        return "Fighting"
-    if pose_agg > 0.5:
-        return "Aggressive"
-    return "Violence"
+# Hysteresis Thresholds
+HYSTERESIS_HIGH = 0.75
+HYSTERESIS_LOW = 0.35
 
+def softmax(x):
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum(axis=-1, keepdims=True)
 
 class ViolenceDetector:
     """
-    ViT-based binary violence classifier with pose-context fusion.
-
-    - Loads model once, cached in memory
-    - Rate-limited to 2 inferences/sec (configurable)
-    - Accepts optional pose_aggression float for score boosting
-    - Falls back safely when model unavailable
+    Stateful temporal violence classifier combining custom ONNX sequence learning,
+    kinematics joint calculations, and image-based ViT backup.
     """
 
     def __init__(self):
-        self.model     = None
+        # Fallback ViT variables
+        self.model = None
         self.processor = None
-        self.loaded    = False
-
+        self.vit_loaded = False
         self._last_run = 0.0
         self._cached_result = self._make_safe_result()
-        
-        # Stateful temporal violence classifier
+
+        # Custom ONNX variables
+        self.onnx_session = None
+        self.onnx_loaded = False
+        self.frame_history = collections.deque(maxlen=16)
+        self.pred_history = collections.deque(maxlen=5)
+        self.last_violence_state = False
+
+        # Stateful temporal kinematics engine
         from services.violence_classifier import ViolenceClassifier
         self.temporal_classifier = ViolenceClassifier()
+
+        # Self load
+        self.load()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def load(self) -> bool:
-        """Load ViT model from HuggingFace cache or download. Returns True on success."""
+        """Attempts to load custom ONNX temporal model first, then loads fallback ViT."""
+        # 1. Custom ONNX temporal model auto-load
+        if os.path.exists(ONNX_MODEL_PATH):
+            try:
+                import onnxruntime as ort
+                logger.info(f"[ViolenceDetector] Custom temporal ONNX model found at {ONNX_MODEL_PATH}. Loading...")
+                
+                # Limit threads to respect MacBook CPU limits
+                opts = ort.SessionOptions()
+                opts.intra_op_num_threads = 2
+                opts.inter_op_num_threads = 2
+                
+                self.onnx_session = ort.InferenceSession(ONNX_MODEL_PATH, opts, providers=["CPUExecutionProvider"])
+                self.onnx_loaded = True
+                logger.info("[ViolenceDetector] Custom temporal ONNX model loaded successfully!")
+                return True
+            except Exception as e:
+                logger.error(f"[ViolenceDetector] Failed to load custom ONNX model: {e}")
+
+        # 2. Fallback HuggingFace ViT load
         try:
             from transformers import ViTForImageClassification, ViTImageProcessor
-
-            logger.info(
-                f"[ViolenceDetector] Loading {MODEL_NAME}... "
-                "(first run may download ~350MB)"
-            )
+            logger.info(f"[ViolenceDetector] Loading fallback ViT model {MODEL_NAME}...")
             self.processor = ViTImageProcessor.from_pretrained(MODEL_NAME)
-            self.model     = ViTForImageClassification.from_pretrained(MODEL_NAME)
-            self.model.eval()   # disable dropout/BN training behaviour
-
-            self.loaded = True
-            logger.info("[ViolenceDetector] Model loaded successfully")
-
-            if hasattr(self.model.config, "id2label"):
-                logger.info(f"[ViolenceDetector] Labels: {self.model.config.id2label}")
+            self.model = ViTForImageClassification.from_pretrained(MODEL_NAME)
+            self.model.eval()
+            self.vit_loaded = True
+            logger.info("[ViolenceDetector] Fallback ViT model loaded successfully.")
             return True
-
-        except ImportError:
-            logger.warning(
-                "[ViolenceDetector] 'transformers' not installed — violence detection disabled"
-            )
-            return False
         except Exception as e:
-            logger.error(f"[ViolenceDetector] Load failed: {e}")
+            logger.warning(f"[ViolenceDetector] Fallback ViT load failed (HuggingFace transformers not installed / network error): {e}")
             return False
 
     # ── Inference ─────────────────────────────────────────────────────────────
 
     def detect(self, frame: np.ndarray, pose_persons: list = None) -> dict:
         """
-        Classify frame as violent / non-violent.
-
-        Args:
-            frame:         BGR numpy array
-            pose_persons:  List of person dicts containing keypoints, aggression_score, etc.
-
-        Returns:
-            {
-              "violence_detected": bool,
-              "confidence": float,
-              "label": str,
-              "action": str,
-              "aggression_score": float,
-            }
+        Classifies current frame. Swaps instantly to custom temporal ONNX sequence
+        classification if compiled; otherwise utilizes fallback ViT.
         """
         h_orig, w_orig = frame.shape[:2]
-        
-        # 1. Update temporal sequence classifier (velocity, acceleration, angles, proximity)
+
+        # Always update the kinematics joint-velocity temporal parser first
         temp_action, temp_score = self.temporal_classifier.process_pose_data(
             pose_persons or [], h_orig, w_orig
         )
 
-        # Rate limiter — return cached result if called too frequently
-        if self._is_rate_limited():
+        # Re-check ONNX model compiled state in case it just became ready
+        if not self.onnx_loaded and os.path.exists(ONNX_MODEL_PATH):
+            self.load()
+
+        # CASE A: CUSTOM ONNX TEMPORAL SEQUENCE MODEL
+        if self.onnx_loaded and self.onnx_session is not None:
+            return self._detect_custom_onnx(frame, temp_action, temp_score)
+
+        # CASE B: FALLBACK HUGGINGFACE ViT + KINEMATICS HEURISTICS
+        return self._detect_fallback_vit(frame, temp_action, temp_score)
+
+    # ── Custom ONNX Execution Pipeline ────────────────────────────────────────
+
+    def _detect_custom_onnx(self, frame: np.ndarray, temp_action: str, temp_score: float) -> dict:
+        """Preprocesses frame, runs optimized classifier sequence prediction and kinematics fusion."""
+        try:
+            # 1. Delegate sequence prediction and smoothing logic to the temporal classifier
+            raw_prob, smoothed_prob, active_thresh, is_violent = self.temporal_classifier.predict_frame_sequence(frame)
+
+            # 2. Joint kinematics blend: boost score on high velocity peaks
+            fused_agg = round(smoothed_prob * 0.5 + temp_score * 0.5, 3) if is_violent else round(temp_score * 0.3, 3)
+
+            # 3. Action mapping based on threat parameters
+            if is_violent:
+                if temp_action in ["Fighting", "Chasing", "Fall Detected"]:
+                    action_label = temp_action
+                else:
+                    action_label = "Fighting" if fused_agg > 0.7 else "Harassment"
+            else:
+                action_label = "Suspicious" if temp_score > 0.38 else "Normal"
+
+            res = {
+                "violence_detected": is_violent,
+                "confidence":        round(raw_prob, 3),
+                "smoothed_confidence": round(smoothed_prob, 3),
+                "active_threshold":  active_thresh,
+                "label":             "Violence" if is_violent else "Non Violence",
+                "action":            action_label,
+                "aggression_score":  fused_agg,
+            }
+            self._cached_result = res
+            return res
+
+        except Exception as e:
+            logger.error(f"[ViolenceDetector] Custom ONNX execution pipeline failed: {e}")
+            # Fall back to kinematic output directly
+            is_violent = temp_score >= 0.65
+            return {
+                "violence_detected": is_violent,
+                "confidence":        temp_score if is_violent else 0.0,
+                "smoothed_confidence": temp_score if is_violent else 0.0,
+                "active_threshold":  ACTIVATE_THRESHOLD,
+                "label":             "Violence" if is_violent else "Non Violence",
+                "action":            temp_action if is_violent else "Suspicious",
+                "aggression_score":  temp_score,
+            }
+
+    # ── Fallback ViT Execution Pipeline ───────────────────────────────────────
+
+    def _detect_fallback_vit(self, frame: np.ndarray, temp_action: str, temp_score: float) -> dict:
+        """Classic image-based ViT inference with pose kinematics blending (used as fallback)."""
+        if (time.time() - self._last_run) < INFERENCE_INTERVAL:
             return self._fuse_temporal(self._cached_result.copy(), temp_action, temp_score)
 
-        if not self.loaded or self.model is None:
-            # Fallback to temporal classifier directly if ViT is unavailable
+        if not self.vit_loaded or self.model is None:
             is_violent = temp_score >= 0.55
             res = {
                 "violence_detected": is_violent,
@@ -148,34 +191,27 @@ class ViolenceDetector:
         try:
             import torch
 
-            # Resize to ViT native resolution (224x224)
-            small   = cv2.resize(frame, (224, 224))
+            # Resize to ViT native size
+            small = cv2.resize(frame, (224, 224))
             pil_img = Image.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
 
-            # Preprocess → inference
             inputs = self.processor(images=pil_img, return_tensors="pt")
             with torch.no_grad():
                 outputs = self.model(**inputs)
-                probs   = torch.softmax(outputs.logits, dim=-1)[0]
+                probs = torch.softmax(outputs.logits, dim=-1)[0]
                 pred_id = int(torch.argmax(probs).item())
                 vit_conf = float(probs[pred_id].item())
 
-            # Resolve label
-            id2label = getattr(
-                self.model.config, "id2label", {0: "Non Violence", 1: "Violence"}
-            )
+            id2label = getattr(self.model.config, "id2label", {0: "Non Violence", 1: "Violence"})
             label = id2label.get(pred_id, str(pred_id))
 
-            # Determine violence flag from label string
             vit_is_violent = (
                 "violence" in label.lower()
                 and "non" not in label.lower()
                 and vit_conf >= VIOLENCE_CONFIDENCE_THRESHOLD
             )
 
-            # Highly stable fused decision logic:
-            # - Suppress ViT false-positives (waving, stretching) if temporal pose activity is low
-            # - Trigger immediately on extreme temporal markers (attacks, punches, kicks)
+            # Blender decision
             is_violent = False
             if vit_is_violent:
                 if temp_score > 0.35:
@@ -184,7 +220,6 @@ class ViolenceDetector:
                 if temp_score > 0.70:
                     is_violent = True
 
-            # Fused aggression confidence
             fused_agg = round(vit_conf * 0.4 + temp_score * 0.6, 3) if is_violent else round(temp_score * 0.3, 3)
             final_action = temp_action if is_violent else ("Suspicious" if temp_score > 0.38 else "Normal")
 
@@ -199,17 +234,13 @@ class ViolenceDetector:
             return self._cached_result.copy()
 
         except Exception as e:
-            logger.error(f"[ViolenceDetector] Inference error: {e}")
+            logger.error(f"[ViolenceDetector] Fallback ViT failed: {e}")
             self._last_run = time.time()
             return self._fuse_temporal(self._cached_result.copy(), temp_action, temp_score)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _is_rate_limited(self) -> bool:
-        return (time.time() - self._last_run) < INFERENCE_INTERVAL
-
     def _make_safe_result(self) -> dict:
-        """Return a safe 'no violence' default result."""
         return {
             "violence_detected": False,
             "confidence":        0.0,
@@ -219,7 +250,6 @@ class ViolenceDetector:
         }
 
     def _fuse_temporal(self, result: dict, action: str, temp_score: float) -> dict:
-        """Apply fresh temporal analysis to rate-limited / fallback results."""
         vit_agg = result["confidence"] if result["violence_detected"] else 0.0
         result["aggression_score"] = round(vit_agg * 0.4 + temp_score * 0.6, 3)
         
@@ -233,4 +263,3 @@ class ViolenceDetector:
         else:
             result["action"] = "Suspicious" if temp_score > 0.38 else "Normal"
         return result
-

@@ -146,6 +146,10 @@ class PoseEstimator:
         if not self.loaded or self.landmarker is None:
             return []
 
+        if frame is None or frame.size == 0 or len(frame.shape) < 3 or frame.shape[0] == 0 or frame.shape[1] == 0:
+            logger.warning("[PoseEstimator] Null/Empty frame received.")
+            return []
+
         try:
             import mediapipe as mp
 
