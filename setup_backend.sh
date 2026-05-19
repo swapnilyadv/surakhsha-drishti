@@ -31,10 +31,14 @@ $PIP install \
   "uvicorn[standard]==0.32.1" \
   "python-multipart==0.0.12" \
   "websockets==14.1" \
+  "opencv-python==4.10.0.84" \
+  "numpy==1.26.4" \
+  "Pillow==10.4.0" \
   "onnxruntime==1.20.1" \
   "transformers==4.47.0" \
   "torch==2.5.1" \
-  "python-dotenv==1.0.1"
+  "python-dotenv==1.0.1" \
+  "mediapipe==0.10.35"
 
 echo ""
 echo "[4/4] Verifying installations..."
@@ -45,6 +49,7 @@ $PYTHON -c "import transformers; print('  ✓ transformers', transformers.__vers
 $PYTHON -c "import torch; print('  ✓ torch', torch.__version__)"
 $PYTHON -c "import cv2; print('  ✓ opencv', cv2.__version__)"
 $PYTHON -c "import numpy; print('  ✓ numpy', numpy.__version__)"
+$PYTHON -c "import mediapipe; print('  ✓ mediapipe', mediapipe.__version__)"
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"

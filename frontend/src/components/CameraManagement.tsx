@@ -47,7 +47,7 @@ export default function CameraManagement({ cameras, onAddCamera, onRemoveCamera,
         {[
           ["TOTAL",    cameras.length,                          "var(--accent)"],
           ["CCTV",     cameras.filter(c => c.type === "cctv").length,   "var(--warning)"],
-          ["WITH GPS", cameras.filter(c => c.lat && c.lng).length,      "var(--safe)"],
+          ["UPLOADED", cameras.filter(c => c.type === "upload").length, "var(--safe)"],
           ["ACTIVE",   cameras.filter(c => c.status === "active").length,"var(--safe)"],
         ].map(([l, v, col]) => (
           <div key={String(l)} style={{ textAlign: "center", minWidth: 60 }}>
@@ -111,8 +111,15 @@ export default function CameraManagement({ cameras, onAddCamera, onRemoveCamera,
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                         <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-bright)" }}>{cam.label}</div>
-                        <div style={{ ...mono, fontSize: 8, padding: "2px 7px", border: "1px solid", color: "var(--warning)", borderColor: "rgba(255,170,0,0.4)" }}>
-                          CCTV
+                        <div style={{
+                          ...mono,
+                          fontSize: 8,
+                          padding: "2px 7px",
+                          border: "1px solid",
+                          color: cam.type === "cctv" ? "var(--warning)" : cam.type === "webcam" ? "var(--accent)" : "var(--safe)",
+                          borderColor: cam.type === "cctv" ? "rgba(255,170,0,0.4)" : cam.type === "webcam" ? "rgba(0,170,255,0.4)" : "rgba(0,255,100,0.4)"
+                        }}>
+                          {cam.type.toUpperCase()}
                         </div>
                         <div style={{ ...mono, fontSize: 8, padding: "2px 7px", border: "1px solid rgba(0,255,136,0.4)", color: "var(--safe)" }}>ACTIVE</div>
                       </div>

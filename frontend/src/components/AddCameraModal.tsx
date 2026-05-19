@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 
 interface Props {
   onAdd: (cam: {
-    type: "cctv" | "webcam";
+    type: "cctv" | "webcam" | "upload";
     label: string;
     url?: string;
     lat?: number;
@@ -15,7 +15,7 @@ interface Props {
 }
 
 export default function AddCameraModal({ onAdd, onClose }: Props) {
-  const [activeTab, setActiveTab] = useState<"cctv" | "webcam">("cctv");
+  const [activeTab, setActiveTab] = useState<"cctv" | "webcam" | "upload">("cctv");
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
   const [lat, setLat] = useState("");
@@ -23,6 +23,11 @@ export default function AddCameraModal({ onAdd, onClose }: Props) {
   const [gpsLoading, setGpsLoading] = useState(false);
   const [ipLoading, setIpLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // File upload state variables
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const mono: React.CSSProperties = { fontFamily: "monospace" };
 
@@ -56,12 +61,68 @@ export default function AddCameraModal({ onAdd, onClose }: Props) {
     setIpLoading(false);
   }
 
-  function submit() {
-    if (!label.trim()) { setError("Label is required"); return; }
+  async function submit() {
+    if (activeTab !== "upload" && !label.trim()) { setError("Label is required"); return; }
     
     if (activeTab === "cctv") {
       if (!url.trim()) { setError("Stream URL is required for CCTV"); return; }
       if (!lat || !lng) { setError("Location is required for CCTV"); return; }
+    }
+
+    if (activeTab === "upload") {
+      if (!selectedFile) { setError("Please select a video file to upload"); return; }
+      
+      setIsUploading(true);
+      setError("");
+      setUploadProgress(0);
+
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+
+      try {
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8765";
+        const xhr = new XMLHttpRequest();
+        
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const percent = Math.round((event.loaded / event.total) * 100);
+            setUploadProgress(percent);
+          }
+        };
+
+        xhr.onload = () => {
+          setIsUploading(false);
+          if (xhr.status >= 200 && xhr.status < 300) {
+            const finalLabel = label.trim() || selectedFile.name.replace(/\.[^/.]+$/, "");
+            onAdd({
+              type: "upload",
+              label: finalLabel,
+              status: "active",
+            });
+            onClose();
+          } else {
+            try {
+              const res = JSON.parse(xhr.responseText);
+              setError(res.message || "Failed to upload video");
+            } catch {
+              setError("Failed to upload video");
+            }
+          }
+        };
+
+        xhr.onerror = () => {
+          setIsUploading(false);
+          setError("Connection to backend server failed");
+        };
+
+        xhr.open("POST", `${backendUrl}/api/upload-video`);
+        xhr.send(formData);
+        return;
+      } catch (err) {
+        setIsUploading(false);
+        setError("Failed to initialize video upload");
+        return;
+      }
     }
 
     onAdd({
@@ -79,7 +140,7 @@ export default function AddCameraModal({ onAdd, onClose }: Props) {
     const host = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
       ? '127.0.0.1' 
       : window.location.hostname;
-    setUrl(`http://${host}:8000/api/stream/mjpeg?camera_id=CAM-01&quality=30&resize=640x360`);
+    setUrl(`http://${host}:8765/api/stream/mjpeg`);
   }
 
   return (
@@ -97,16 +158,18 @@ export default function AddCameraModal({ onAdd, onClose }: Props) {
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 2, background: "rgba(255,255,255,0.05)", padding: 2, marginBottom: 20 }}>
-          {(["cctv", "webcam"] as const).map(t => (
+          {(["cctv", "webcam", "upload"] as const).map(t => (
             <button key={t} onClick={() => setActiveTab(t)}
               style={{ flex: 1, padding: "10px", ...mono, fontSize: 10, letterSpacing: 2, border: "none", cursor: "pointer", background: activeTab === t ? "var(--accent2)" : "transparent", color: activeTab === t ? "#fff" : "var(--text-dim)", transition: "0.2s" }}>
-              {t.toUpperCase()} SOURCE
+              {t.toUpperCase()} {t === "upload" ? "VIDEO" : "SOURCE"}
             </button>
           ))}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          <Field label="Identification Label" value={label} onChange={setLabel} placeholder={activeTab === "cctv" ? "e.g. Platform CCTV-01" : "e.g. Mobile Unit Alpha"} />
+          {activeTab !== "upload" && (
+            <Field label="Identification Label" value={label} onChange={setLabel} placeholder={activeTab === "cctv" ? "e.g. Platform CCTV-01" : "e.g. Mobile Unit Alpha"} />
+          )}
           
           {activeTab === "cctv" && (
             <div>
@@ -129,32 +192,67 @@ export default function AddCameraModal({ onAdd, onClose }: Props) {
             </div>
           )}
 
-          <div>
-            <div style={{ ...mono, fontSize: 9, color: "var(--text-dim)", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 }}>Geolocation Bind</div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-              <input value={lat} onChange={e => setLat(e.target.value)} placeholder="Lat"
-                style={{ flex: 1, background: "rgba(0,100,200,0.06)", border: "1px solid var(--border)", color: "var(--text-bright)", ...mono, fontSize: 12, padding: "8px 10px", outline: "none" }}/>
-              <input value={lng} onChange={e => setLng(e.target.value)} placeholder="Lng"
-                style={{ flex: 1, background: "rgba(0,100,200,0.06)", border: "1px solid var(--border)", color: "var(--text-bright)", ...mono, fontSize: 12, padding: "8px 10px", outline: "none" }}/>
+          {activeTab === "upload" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ ...mono, fontSize: 9, color: "var(--text-dim)", letterSpacing: 2, textTransform: "uppercase" }}>Select Video File</div>
+              <input type="file" accept=".mp4,.mov,.avi,.mkv" disabled={isUploading} onChange={e => {
+                if (e.target.files && e.target.files[0]) {
+                  setSelectedFile(e.target.files[0]);
+                  if (!label) {
+                    setLabel(e.target.files[0].name.replace(/\.[^/.]+$/, ""));
+                  }
+                }
+              }}
+                style={{ width: "100%", background: "rgba(0,100,200,0.06)", border: "1px solid var(--border)", color: "var(--text-bright)", ...mono, fontSize: 12, padding: "9px 12px", cursor: isUploading ? "not-allowed" : "pointer" }} />
+              
+              {isUploading && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", ...mono, fontSize: 10, marginBottom: 4 }}>
+                    <span style={{ color: "var(--accent)" }}>UPLOADING...</span>
+                    <span>{uploadProgress}%</span>
+                  </div>
+                  <div style={{ height: 4, background: "rgba(255,255,255,0.1)", borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${uploadProgress}%`, background: "var(--accent2)", transition: "width 0.2s" }} />
+                  </div>
+                </div>
+              )}
+
+              <div style={{ ...mono, fontSize: 10, color: "var(--accent)", background: "rgba(0,170,255,0.05)", border: "1px solid rgba(0,170,255,0.2)", padding: 12, lineHeight: 1.6, marginTop: 4 }}>
+                ✓ Supported formats: MP4, MOV, AVI, MKV.<br/>
+                ✓ Runs through full real-time human, pose, violence, and weapon detection pipelines.<br/>
+                ✓ Automatically streams overlays directly to the dashboard.
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={getIPLocation} disabled={ipLoading}
-                style={{ flex: 1, ...mono, fontSize: 9, background: "transparent", border: "1px solid var(--border)", color: "var(--text-dim)", padding: "7px", cursor: "pointer" }}>
-                {ipLoading ? "..." : "IP LOCATE"}
-              </button>
-              <button onClick={getDeviceGPS} disabled={gpsLoading}
-                style={{ flex: 1, ...mono, fontSize: 9, background: "transparent", border: "1px solid var(--border)", color: "var(--text-dim)", padding: "7px", cursor: "pointer" }}>
-                {gpsLoading ? "..." : "DEVICE GPS"}
-              </button>
+          )}
+
+          {activeTab !== "upload" && (
+            <div>
+              <div style={{ ...mono, fontSize: 9, color: "var(--text-dim)", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 }}>Geolocation Bind</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                <input value={lat} onChange={e => setLat(e.target.value)} placeholder="Lat"
+                  style={{ flex: 1, background: "rgba(0,100,200,0.06)", border: "1px solid var(--border)", color: "var(--text-bright)", ...mono, fontSize: 12, padding: "8px 10px", outline: "none" }}/>
+                <input value={lng} onChange={e => setLng(e.target.value)} placeholder="Lng"
+                  style={{ flex: 1, background: "rgba(0,100,200,0.06)", border: "1px solid var(--border)", color: "var(--text-bright)", ...mono, fontSize: 12, padding: "8px 10px", outline: "none" }}/>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={getIPLocation} disabled={ipLoading}
+                  style={{ flex: 1, ...mono, fontSize: 9, background: "transparent", border: "1px solid var(--border)", color: "var(--text-dim)", padding: "7px", cursor: "pointer" }}>
+                  {ipLoading ? "..." : "IP LOCATE"}
+                </button>
+                <button onClick={getDeviceGPS} disabled={gpsLoading}
+                  style={{ flex: 1, ...mono, fontSize: 9, background: "transparent", border: "1px solid var(--border)", color: "var(--text-dim)", padding: "7px", cursor: "pointer" }}>
+                  {gpsLoading ? "..." : "DEVICE GPS"}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           {error && <div style={{ ...mono, fontSize: 10, color: "var(--danger)", textAlign: "center" }}>⚠ {error}</div>}
           
           <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-            <button onClick={onClose} style={{ flex: 1, padding: "12px", ...mono, fontSize: 11, background: "transparent", border: "1px solid var(--border)", color: "var(--text-dim)", cursor: "pointer" }}>CANCEL</button>
-            <button onClick={submit} style={{ flex: 2, padding: "12px", fontFamily: "Orbitron,sans-serif", fontSize: 12, fontWeight: 700, background: "var(--accent2)", border: "none", color: "#fff", cursor: "pointer", letterSpacing: 2 }}>
-              INITIALIZE {activeTab.toUpperCase()}
+            <button onClick={onClose} disabled={isUploading} style={{ flex: 1, padding: "12px", ...mono, fontSize: 11, background: "transparent", border: "1px solid var(--border)", color: "var(--text-dim)", cursor: isUploading ? "not-allowed" : "pointer" }}>CANCEL</button>
+            <button onClick={submit} disabled={isUploading} style={{ flex: 2, padding: "12px", fontFamily: "Orbitron,sans-serif", fontSize: 12, fontWeight: 700, background: isUploading ? "rgba(255,255,255,0.1)" : "var(--accent2)", border: "none", color: isUploading ? "var(--text-dim)" : "#fff", cursor: isUploading ? "not-allowed" : "pointer", letterSpacing: 2 }}>
+              {isUploading ? "UPLOADING..." : `INITIALIZE ${activeTab.toUpperCase()}`}
             </button>
           </div>
         </div>

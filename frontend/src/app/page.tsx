@@ -15,10 +15,12 @@ import Toast, { useToast } from "@/components/Toast";
 
 import { useCameraStore }   from "@/hooks/useCameraStore";
 import { useEvidenceStore } from "@/hooks/useEvidenceStore";
+import { useBackendAI }     from "@/hooks/useBackendAI";
 
 type Tab = "dashboard" | "evidence" | "map" | "admin";
 
 export default function Home() {
+  const { detection } = useBackendAI();
   const [loggedIn,    setLoggedIn]    = useState(false);
   const [currentUser, setCurrentUser] = useState("");
   const [isAdmin,     setIsAdmin]     = useState(false);
@@ -71,13 +73,56 @@ export default function Home() {
     localStorage.removeItem("sd_auth");
   };
 
-  const stopAlarm = () => {
+  const stopAlarm = async () => {
+    try {
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8765";
+      await fetch(`${backendUrl}/api/acknowledge`, { method: "POST" });
+    } catch (e) {
+      console.error("Failed to acknowledge alarm on backend:", e);
+    }
     if (alarmRef.current) {
       alarmRef.current.pause();
       alarmRef.current.currentTime = 0;
     }
     setAlertMsg("");
   };
+
+  // Sync live alarm sound from backend WebSocket state
+  useEffect(() => {
+    if (!loggedIn) return;
+    if (detection.alarm_active) {
+      if (alarmRef.current) {
+        alarmRef.current.play().catch(e => console.warn("Audio play blocked by browser gesture:", e));
+      }
+    } else {
+      if (alarmRef.current) {
+        alarmRef.current.pause();
+        alarmRef.current.currentTime = 0;
+      }
+    }
+  }, [detection.alarm_active, loggedIn]);
+
+  // Listen for backend new evidence events
+  useEffect(() => {
+    const handleNewEvidence = (e: any) => {
+      const item = e.detail;
+      if (item) {
+        // Automatically add backend URL prefix if it's relative
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8765";
+        const finalUrl = item.videoUrl.startsWith("/") ? `${backendUrl}${item.videoUrl}` : item.videoUrl;
+        
+        addEvidence({
+          ...item,
+          videoUrl: finalUrl
+        });
+        
+        // Notify the user of a completed recording!
+        showToast(`🎥 New evidence clip auto-saved: ${item.cameraLabel} (${item.duration})`, false);
+      }
+    };
+    window.addEventListener("new-evidence-recorded", handleNewEvidence);
+    return () => window.removeEventListener("new-evidence-recorded", handleNewEvidence);
+  }, [addEvidence, showToast]);
 
   useEffect(() => {
     if (!toast) return;
@@ -127,7 +172,8 @@ export default function Home() {
     showToast(msg, true);
   }, [showToast]);
 
-  const isAlert = alertMsg.length > 0;
+  const isAlert = alertMsg.length > 0 || !!detection.violence;
+  const activeAlertMsg = alertMsg || `AI ACTIVE SURVEILLANCE ENGINE — THREAT THRESHOLD REACHED: ${detection.event || "VIOLENCE"} DETECTED`;
 
   return (
     <>
@@ -147,6 +193,7 @@ export default function Home() {
             currentTab={tab} 
             onTabChange={t => setTab(t as Tab)} 
             isAlert={isAlert}
+            isRecording={detection.recording}
             onLogout={handleLogout} 
             currentUser={currentUser}
             isAdmin={isAdmin}
@@ -157,7 +204,24 @@ export default function Home() {
               <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
                 style={{ background: "rgba(255,34,68,0.13)", borderBottom: "2px solid var(--danger)", padding: "9px 20px", fontFamily: "monospace", fontSize: 12, color: "var(--danger)", letterSpacing: 2, textTransform: "uppercase", display: "flex", alignItems: "center", gap: 14, flexShrink: 0, animation: "alert-flash-bg 0.5s infinite" }}>
                 <span>⚠</span>
-                <span>{alertMsg}</span>
+                <span>{activeAlertMsg}</span>
+                {detection.recording && (
+                  <span style={{
+                    background: "#ef4444",
+                    color: "#fff",
+                    padding: "2px 8px",
+                    borderRadius: 3,
+                    fontSize: 10,
+                    fontWeight: "bold",
+                    letterSpacing: 1,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4
+                  }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#fff", animation: "pulse-dot 1s infinite alternate" }} />
+                    REC
+                  </span>
+                )}
                 <button onClick={stopAlarm}
                   style={{ marginLeft: "auto", fontFamily: "monospace", fontSize: 10, background: "transparent", border: "1px solid var(--danger)", color: "var(--danger)", padding: "3px 12px", cursor: "pointer", letterSpacing: 1 }}>
                   ACKNOWLEDGE

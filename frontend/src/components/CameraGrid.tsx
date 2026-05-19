@@ -37,6 +37,8 @@ export default function CameraGrid({ cameras, alertCamIds, onAddCamera, onRemove
 
   const mono: React.CSSProperties = { fontFamily: "monospace" };
   const cols = cameras.length === 0 ? 1 : cameras.length === 1 ? 1 : cameras.length <= 4 ? 2 : 3;
+  // Calculate row height: 1 cam = full height, 2-4 = half, 5+ = fixed 280px
+  const rowHeight = cameras.length === 1 ? "100%" : cameras.length <= 4 ? "calc(50% - 1px)" : "280px";
 
   return (
     <div style={{ flex: 1, borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -135,17 +137,24 @@ export default function CameraGrid({ cameras, alertCamIds, onAddCamera, onRemove
             </div>
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 2, padding: 2, height: "100%", alignContent: "start" }}>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gridAutoRows: rowHeight, gap: 2, padding: 2, height: "100%" }}>
             <AnimatePresence>
               {cameras.map(cam => (
-                <motion.div key={cam.id} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} transition={{ duration: 0.2 }}>
+                <motion.div
+                  key={cam.id}
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  transition={{ duration: 0.2 }}
+                  style={{ height: "100%", minHeight: 200, overflow: "hidden" }}
+                >
                   <CameraFeed
                     camera={cam}
                     onRemove={onRemoveCamera}
                     onAlert={onAlert}
                     onGenderUpdate={handleGenderUpdate}
                     onDetection={onDetection}
-                    backendDetection={cam.type === "webcam" ? detection : null}
+                    backendDetection={detection}
                   />
                 </motion.div>
               ))}

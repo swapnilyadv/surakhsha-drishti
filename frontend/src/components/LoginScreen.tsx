@@ -38,33 +38,77 @@ export default function LoginScreen({ onLogin }: Props) {
     }
 
     // 2. Try Supabase Auth (for official email-based accounts)
-    if (e.includes("@")) {
-      const { data, error: authError } = await supabase.auth.signInWithPassword({
-        email: e,
-        password: p,
-      });
+    try {
+      if (e.includes("@")) {
+        const { data, error: authError } = await supabase.auth.signInWithPassword({
+          email: e,
+          password: p,
+        });
 
-      if (!authError && data.user) {
-        setPendingUser(data.user.email?.split('@')[0].toUpperCase() || "ADMIN");
-        setIsAdmin(true); // Email logins are considered Admins in this system
-        setBooting(true);
-        return;
+        if (!authError && data.user) {
+          setPendingUser(data.user.email?.split('@')[0].toUpperCase() || "ADMIN");
+          setIsAdmin(true); // Email logins are considered Admins in this system
+          setBooting(true);
+          return;
+        }
       }
+    } catch (err) {
+      console.warn("Supabase Auth service unreachable. Using database fallback.");
     }
 
-    // 2. Cloud Police Station Accounts (Supabase Table)
-    const { data: station, error: dbError } = await supabase
-      .from("police_stations")
-      .select("*")
-      .eq("name", e)
-      .eq("password", p)
-      .single();
+    // 3. Try Supabase Database table check
+    let loginSuccessful = false;
+    try {
+      const { data: station, error: dbError } = await supabase
+        .from("police_stations")
+        .select("*")
+        .eq("name", e)
+        .eq("password", p)
+        .single();
 
-    if (!dbError && station) {
-      setPendingUser(station.name);
-      setIsAdmin(false); // Station logins are not admins
-      setBooting(true);
-    } else {
+      if (!dbError && station) {
+        setPendingUser(station.name);
+        setIsAdmin(false); // Station logins are not admins
+        setBooting(true);
+        loginSuccessful = true;
+        return;
+      }
+    } catch (err) {
+      console.warn("Supabase DB service unreachable. Attempting cache credential matching.");
+    }
+
+    // 4. Local Storage Backup Fallback for Station accounts
+    if (!loginSuccessful) {
+      try {
+        const cachedStr = localStorage.getItem("sd_police_stations");
+        if (cachedStr) {
+          const stations = JSON.parse(cachedStr);
+          const matched = stations.find((s: any) => s.name.toUpperCase() === u || s.name === e);
+          if (matched && matched.password === p) {
+            setPendingUser(matched.name);
+            setIsAdmin(matched.role !== "Police");
+            setBooting(true);
+            return;
+          }
+        } else {
+          // If no local storage exists yet, match against hardcoded seed accounts
+          const seedMatched = [
+            { id: "ST-01", name: "Mumbai Headquarters", password: "adminpassword" },
+            { id: "ST-02", name: "Bandra Police Station", password: "bandrapassword" },
+            { id: "ST-03", name: "Delhi Central Division", password: "delhipassword" }
+          ].find(s => s.name.toUpperCase() === u || s.name === e);
+          
+          if (seedMatched && seedMatched.password === p) {
+            setPendingUser(seedMatched.name);
+            setIsAdmin(false);
+            setBooting(true);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("Failed verifying credentials against local cache:", err);
+      }
+
       setError(true);
       setTimeout(() => setError(false), 3000);
     }

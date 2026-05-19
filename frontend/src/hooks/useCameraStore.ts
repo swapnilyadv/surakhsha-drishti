@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 
 export interface CameraEntry {
   id: string;
-  type: "cctv" | "webcam";
+  type: "cctv" | "webcam" | "upload";
   label: string;
   url?: string;       // CCTV stream URL (MJPEG / HLS)
   lat?: number;
@@ -17,7 +17,18 @@ const KEY = "sd_cameras_v2";
 function load(): CameraEntry[] {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    
+    // Sanitize loaded array from legacy/invalid entries
+    return parsed.filter((c: any) => 
+      c && 
+      typeof c === "object" && 
+      c.id && 
+      (c.type === "cctv" || c.type === "webcam" || c.type === "upload") && 
+      c.label
+    );
   } catch { return []; }
 }
 

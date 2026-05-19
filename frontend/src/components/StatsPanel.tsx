@@ -30,7 +30,7 @@ export default function StatsPanel({
 
   // Real-time backend detection data (violence %, weapon status)
   const { detection, connected } = useBackendAI();
-  const violenceConf = Math.round(detection.violence_confidence * 100);
+  const violenceConf = detection.violence_detected ? Math.round(detection.violence_confidence * 100) : 0;
   const violenceDetected = detection.violence_detected;
   const weaponDetected = detection.weapon_detected;
   // Use backend or prop for alert state

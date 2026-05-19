@@ -91,7 +91,7 @@ export default function LiveMap({ cameras, alertCamIds, showToast, onUpdateCamer
                 </div>
                 <button onClick={() => setBigScreenCamId(null)} style={{ background: "transparent", border: "none", color: "var(--text-dim)", fontSize: 24, cursor: "pointer", lineHeight: 1 }}>×</button>
               </div>
-              <div style={{ padding: 10, aspectRatio: "16/9" }}>
+              <div style={{ padding: 10, width: "100%", aspectRatio: "16/9", overflow: "hidden", position: "relative" }}>
                  <CameraFeed
                     camera={bigScreenCam}
                     onRemove={() => {}} // Disabled in big view

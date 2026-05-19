@@ -28,6 +28,10 @@ export interface BackendDetection {
   female_count: number;
   timestamp: number;
   frame_count: number;
+  violence?: boolean;
+  recording?: boolean;
+  alarm_active?: boolean;
+  event?: string;
 }
 
 const DEFAULT_STATE: BackendDetection = {
@@ -41,6 +45,10 @@ const DEFAULT_STATE: BackendDetection = {
   female_count: 0,
   timestamp: 0,
   frame_count: 0,
+  violence: false,
+  recording: false,
+  alarm_active: false,
+  event: "NOMINAL",
 };
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8765/ws/detections";
@@ -90,6 +98,13 @@ export function useBackendAI() {
         if (!mountedRef.current) return;
         try {
           const data = JSON.parse(event.data);
+          
+          // Handle new evidence broadcast
+          if (data.type === "new_evidence") {
+            window.dispatchEvent(new CustomEvent("new-evidence-recorded", { detail: data.evidence }));
+            return;
+          }
+
           if (data.type === "keepalive" || data === "pong") return;
           // Only update state if data actually changed (avoid re-renders)
           setDetection(prev => {
@@ -98,7 +113,9 @@ export function useBackendAI() {
               prev.violence_detected !== data.violence_detected ||
               prev.weapon_confidence !== data.weapon_confidence ||
               prev.violence_confidence !== data.violence_confidence ||
-              prev.male_count !== data.male_count;
+              prev.male_count !== data.male_count ||
+              prev.recording !== data.recording ||
+              prev.alarm_active !== data.alarm_active;
             return changed ? { ...DEFAULT_STATE, ...data } : prev;
           });
         } catch {

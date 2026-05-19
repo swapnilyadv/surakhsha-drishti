@@ -5,12 +5,13 @@ interface Props {
   currentTab: string;
   onTabChange: (tab: string) => void;
   isAlert: boolean;
+  isRecording?: boolean;
   onLogout: () => void;
   currentUser: string;
   isAdmin?: boolean;
 }
 
-export default function TopBar({ currentTab, onTabChange, isAlert, onLogout, currentUser, isAdmin }: Props) {
+export default function TopBar({ currentTab, onTabChange, isAlert, isRecording, onLogout, currentUser, isAdmin }: Props) {
   const [time, setTime] = useState("");
 
   const TABS = ["dashboard", "evidence", "map"];
@@ -62,6 +63,25 @@ export default function TopBar({ currentTab, onTabChange, isAlert, onLogout, cur
 
       {/* Right side */}
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
+        {isRecording && (
+          <div style={{
+            fontFamily: "monospace", fontSize: 10, letterSpacing: 1.5, padding: "4px 12px",
+            border: "1px solid var(--danger)",
+            color: "#fff",
+            background: "rgba(255, 34, 68, 0.8)",
+            display: "flex", alignItems: "center", gap: 6,
+            fontWeight: "bold",
+            borderRadius: 3,
+            animation: "blink 1s infinite alternate"
+          }}>
+            <div style={{
+              width: 6, height: 6, borderRadius: "50%", background: "#fff",
+              animation: "pulse-dot 1s infinite alternate",
+            }} />
+            <span>● REC</span>
+          </div>
+        )}
+
         {/* Status pill */}
         <div style={{
           fontFamily: "monospace", fontSize: 10, letterSpacing: 1.5, padding: "4px 12px",

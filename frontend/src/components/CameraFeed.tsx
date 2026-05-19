@@ -65,6 +65,15 @@ const CameraFeed = memo(function CameraFeed({
   const [modelsReady, setModelsReady] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recSeconds, setRecSeconds]   = useState(0);
+  const [streamSrc, setStreamSrc]     = useState("");
+
+  useEffect(() => {
+    if (!camera) return;
+    const base = camera.type === "cctv" ? camera.url : MJPEG_URL;
+    if (!base) return;
+    const separator = base.includes("?") ? "&" : "?";
+    setStreamSrc(`${base}${separator}camId=${camera.id}&t=${Date.now()}`);
+  }, [camera.id, camera.type, camera.url]);
 
   const isWeaponAlert   = backendDetection?.weapon_detected   ?? false;
   const isViolenceAlert = backendDetection?.violence_detected ?? false;
@@ -117,6 +126,14 @@ const CameraFeed = memo(function CameraFeed({
       stream?.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     };
+  }, [camera.type]);
+
+  // ── 2b. Dynamically select source on AI backend ────────────────────────────
+  useEffect(() => {
+    if (camera.type === "webcam" || camera.type === "cctv") {
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8765";
+      fetch(`${backendUrl}/api/select-source?source=0`, { method: "POST" }).catch(() => {});
+    }
   }, [camera.type]);
 
   // ── 3. Auto-Record Logic ──────────────────────────────────────────────────
@@ -237,7 +254,11 @@ const CameraFeed = memo(function CameraFeed({
       const now = Date.now();
 
       if (now - lastRunRef.current >= GENDER_INTERVAL_MS) {
-        const source = camera.type === "webcam" ? hiddenVideoRef.current : displayImgCctvRef.current;
+        const source = camera.type === "webcam"
+          ? hiddenVideoRef.current
+          : camera.type === "upload"
+          ? displayImgRef.current
+          : displayImgCctvRef.current;
         const isReady = source && faceapiRef.current && modelsLoadedRef.current &&
           (source instanceof HTMLVideoElement ? source.readyState >= 2 : (source as HTMLImageElement).complete);
 
@@ -283,44 +304,143 @@ const CameraFeed = memo(function CameraFeed({
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="relative overflow-hidden h-full w-full bg-black rounded" style={{ border: isAnyAlert ? "2px solid var(--danger)" : "1px solid var(--border)" }}>
-      {camera.type === "webcam" && <video ref={hiddenVideoRef} autoPlay playsInline muted className="hidden" />}
+    <div style={{
+      position: "relative",
+      overflow: "hidden",
+      width: "100%",
+      height: "100%",
+      background: "#000",
+      borderRadius: 4,
+      border: isAnyAlert ? "2px solid var(--danger)" : "1px solid var(--border)",
+      boxSizing: "border-box"
+    }}>
+      {camera.type === "webcam" && <video ref={hiddenVideoRef} autoPlay playsInline muted style={{ display: "none" }} />}
       
-      <div className="relative w-full h-full">
-        {camera.type === "webcam" ? (
-          !streamError && <img ref={displayImgRef} src={MJPEG_URL} alt="Live" className="w-full h-full object-cover" onError={() => setStreamError(true)} onLoad={() => setIsLoaded(true)} />
-        ) : (
-          camera.url && !streamError && <img ref={displayImgCctvRef} src={camera.url} crossOrigin="anonymous" alt="CCTV" className="w-full h-full object-cover" onError={() => setStreamError(true)} onLoad={() => setIsLoaded(true)} />
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        {streamSrc && !streamError && (
+          <img 
+            ref={camera.type === "cctv" ? displayImgCctvRef : displayImgRef} 
+            src={streamSrc} 
+            crossOrigin="anonymous" 
+            alt="Live Stream" 
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} 
+            onError={() => setStreamError(true)} 
+            onLoad={() => setIsLoaded(true)} 
+          />
         )}
 
         {streamError && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 text-zinc-500">
-            <span className="text-2xl">📡</span>
-            <span className="text-[10px] mt-2 font-mono">STREAM OFFLINE</span>
+          <div style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "#18181b",
+            color: "#71717a",
+            zIndex: 5
+          }}>
+            <span style={{ fontSize: 24, marginBottom: 8 }}>📡</span>
+            <span style={{ fontSize: 10, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: 1 }}>STREAM OFFLINE</span>
           </div>
         )}
 
-        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none z-10" />
+        <canvas ref={canvasRef} style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+          zIndex: 10
+        }} />
 
         {/* HUD Elements */}
-        <div className="absolute bottom-2 left-2 z-20 flex items-center gap-2 bg-black/60 px-2 py-1 rounded border border-white/10">
-          <div className={`w-2 h-2 rounded-full ${isAnyAlert ? "bg-red-500 animate-pulse" : "bg-green-500"}`} />
-          <span className="text-[9px] text-white font-mono uppercase tracking-widest">{camera.label}</span>
+        <div style={{
+          position: "absolute",
+          bottom: 8,
+          left: 8,
+          zIndex: 20,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          background: "rgba(0,0,0,0.65)",
+          padding: "4px 10px",
+          borderRadius: 4,
+          border: "1px solid rgba(255,255,255,0.12)",
+          backdropFilter: "blur(4px)"
+        }}>
+          <div style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: isAnyAlert ? "var(--danger)" : "var(--safe)",
+            animation: isAnyAlert ? "pulse 1s infinite alternate" : "none"
+          }} />
+          <span style={{ fontSize: 9, color: "#fff", fontFamily: "monospace", textTransform: "uppercase", letterSpacing: 2 }}>{camera.label}</span>
         </div>
 
         {isRecording && (
-          <div className="absolute top-2 left-2 z-30 bg-red-600/90 text-white text-[9px] px-2 py-1 rounded font-bold animate-pulse">
+          <div style={{
+            position: "absolute",
+            top: 8,
+            left: 8,
+            zIndex: 30,
+            background: "rgba(220,38,38,0.9)",
+            color: "#fff",
+            fontSize: 9,
+            padding: "4px 8px",
+            borderRadius: 4,
+            fontWeight: "bold",
+            fontFamily: "monospace",
+            letterSpacing: 1
+          }}>
             REC {recSeconds}s
           </div>
         )}
 
         {isAnyAlert && (
-          <div className="absolute top-0 left-0 right-0 z-20 bg-red-600/80 text-white text-[10px] py-1 text-center font-bold tracking-tighter animate-blink">
+          <div style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 20,
+            background: "rgba(220,38,38,0.85)",
+            color: "#fff",
+            fontSize: 10,
+            padding: "6px 0",
+            textAlign: "center",
+            fontWeight: "bold",
+            fontFamily: "monospace",
+            letterSpacing: 2,
+            textTransform: "uppercase"
+          }}>
             ⚠ {isWeaponAlert ? "WEAPON DETECTED" : "VIOLENCE DETECTED"}
           </div>
         )}
 
-        <button onClick={() => onRemove(camera.id)} className="absolute top-2 right-2 z-30 w-6 h-6 bg-red-500/20 hover:bg-red-500/40 text-red-500 rounded flex items-center justify-center">×</button>
+        <button onClick={() => onRemove(camera.id)} style={{
+          position: "absolute",
+          top: 8,
+          right: 8,
+          zIndex: 30,
+          width: 24,
+          height: 24,
+          background: "rgba(239,68,68,0.2)",
+          border: "none",
+          color: "#ef4444",
+          fontSize: 16,
+          fontWeight: "bold",
+          borderRadius: 4,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+          transition: "0.2s"
+        }}
+        onMouseEnter={e => { (e.target as any).style.background = "rgba(239,68,68,0.4)"; }}
+        onMouseLeave={e => { (e.target as any).style.background = "rgba(239,68,68,0.2)"; }}>×</button>
       </div>
     </div>
   );
