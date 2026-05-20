@@ -261,8 +261,32 @@ class PersonTrajectory:
             self.pose_flags.append("fall_detected")
             raw_score += 0.35
 
-        # EMA decay blend
-        self.aggression_score = round(self.aggression_score * AGGRESSION_DECAY + raw_score * (1.0 - AGGRESSION_DECAY), 3)
+        # Check active motion requirement (Task 2 & 3)
+        has_active_motion = (
+            max_wrist_speed > 0.022 or 
+            self.body_acceleration > 0.45 or 
+            self.repeated_arm_strikes or
+            punching or
+            kicking
+        )
+        
+        combat_pose_detected = ("combat_stance" in self.pose_flags or "raised_fist" in self.pose_flags)
+        motion_low = not has_active_motion
+        
+        if combat_pose_detected and motion_low:
+            # Suppress pose score heavily (Task 3)
+            raw_score = 0.0
+            if "raised_fist" in self.pose_flags:
+                self.pose_flags.remove("raised_fist")
+            if "combat_stance" in self.pose_flags:
+                self.pose_flags.remove("combat_stance")
+
+        # EMA decay blend or rapid post-action decay (Task 1)
+        if not has_active_motion and raw_score == 0.0:
+            # Rapid decay (decay rate of 0.65 instead of AGGRESSION_DECAY = 0.92)
+            self.aggression_score = round(self.aggression_score * 0.65, 3)
+        else:
+            self.aggression_score = round(self.aggression_score * AGGRESSION_DECAY + raw_score * (1.0 - AGGRESSION_DECAY), 3)
 
     def _calc_joint_velocity(self, kp_idx: int) -> float:
         n = len(self.history)
@@ -347,6 +371,9 @@ class ViolenceClassifier:
         self.trajectories: dict[int, PersonTrajectory] = {}
         self.violence_score_history: collections.deque = collections.deque(maxlen=VIOLENCE_BUFFER_SIZE)
         self.motion_intensity_history: collections.deque = collections.deque(maxlen=MAX_HISTORY_FRAMES)
+        self.fast_violence_mode = False
+        self.no_new_aggression_frames = 0
+        self.recent_violence_counter = 0
         
         # ONNX variables
         self.onnx_session = None
@@ -711,6 +738,139 @@ class ViolenceClassifier:
             self.aggression_boost = min(1.0, self.aggression_boost + 0.20)
 
         # ============================================================
+        # TASKS 6 & 9: LIGHTWEIGHT CAMERA SHAKE FILTER (Centroid Vector Analysis)
+        # ============================================================
+        camera_motion_detected = False
+        
+        # If we have 2 or more people, check if their centroids are displaced in the same direction and magnitude
+        if len(t_keys) >= 2:
+            displacements = []
+            for tk in t_keys:
+                traj = self.trajectories[tk]
+                if len(traj.centroid_history) >= 2:
+                    c1 = traj.centroid_history[-2]
+                    c2 = traj.centroid_history[-1]
+                    dx = c2[0] - c1[0]
+                    dy = c2[1] - c1[1]
+                    displacements.append((dx, dy))
+            
+            if len(displacements) >= 2:
+                # Check if all vectors are similar in direction and magnitude
+                all_similar = True
+                for i in range(len(displacements)):
+                    for j in range(i + 1, len(displacements)):
+                        dx1, dy1 = displacements[i]
+                        dx2, dy2 = displacements[j]
+                        mag1 = math.sqrt(dx1**2 + dy1**2)
+                        mag2 = math.sqrt(dx2**2 + dy2**2)
+                        
+                        # We only evaluate camera shake if there's actual motion (magnitude > 0.005)
+                        if mag1 > 0.005 and mag2 > 0.005:
+                            dot_product = dx1 * dx2 + dy1 * dy2
+                            cosine_sim = dot_product / (mag1 * mag2) if (mag1 * mag2) > 0 else 0.0
+                            
+                            # Same direction (cosine similarity > 0.85) and similar magnitude (ratio between 0.5 and 2.0)
+                            mag_ratio = mag1 / mag2 if mag2 > 0 else 0.0
+                            if cosine_sim < 0.85 or mag_ratio < 0.5 or mag_ratio > 2.0:
+                                all_similar = False
+                                break
+                        else:
+                            all_similar = False
+                            break
+                    if not all_similar:
+                        break
+                
+                if all_similar:
+                    camera_motion_detected = True
+
+        # Even for 1 person, check if the single person centroid displacement matches global camera motion
+        elif len(t_keys) == 1:
+            traj = self.trajectories[t_keys[0]]
+            if len(traj.centroid_history) >= 2:
+                c1 = traj.centroid_history[-2]
+                c2 = traj.centroid_history[-1]
+                dx = c2[0] - c1[0]
+                dy = c2[1] - c1[1]
+                mag = math.sqrt(dx**2 + dy**2)
+                
+                # Check if frame motion differencing is high and matches single centroid shift
+                frame_motion = self.motion_intensity_history[-1] if self.motion_intensity_history else 0.0
+                if mag > 0.015 and frame_motion > 0.40:
+                    # Centroid motion is fully accounted for by global camera movement
+                    camera_motion_detected = True
+
+        # ============================================================
+        # TASK 1: CALM INTERACTION FILTER (Hugging, Handshakes, Calm contact)
+        # ============================================================
+        self.calm_interaction_mode = False
+        
+        smooth_motion = False
+        low_arm_velocity = True
+        low_jitter = True
+        synchronized_centroids = True
+        
+        # Require dynamic aggression signal to enable close_combat_mode (Task 5)
+        has_aggression_signal = (
+            repeated_strikes or
+            arm_velocity_bursts or
+            chaotic_movement_detected or
+            repeated_directional_changes or
+            violent_bbox_jitter or
+            rapid_centroid_acceleration or
+            self.punch_detected or
+            self.recoil_active
+        )
+
+        if len(t_keys) >= 2:
+            t_a = self.trajectories[t_keys[0]]
+            t_b = self.trajectories[t_keys[1]]
+            
+            # Smooth movement: low centroid acceleration
+            if t_a.body_acceleration < 0.45 and t_b.body_acceleration < 0.45:
+                smooth_motion = True
+                
+            # Low arm velocity
+            max_wrist_vel_a = max(t_a.wrist_velocities) if t_a.wrist_velocities else 0.0
+            max_wrist_vel_b = max(t_b.wrist_velocities) if t_b.wrist_velocities else 0.0
+            if max_wrist_vel_a > 0.022 or max_wrist_vel_b > 0.022:
+                low_arm_velocity = False
+                
+            # Low bbox jitter
+            if len(t_a.bbox_history) >= 2 and len(t_b.bbox_history) >= 2:
+                b1_a, b2_a = list(t_a.bbox_history)[-2], list(t_a.bbox_history)[-1]
+                b1_b, b2_b = list(t_b.bbox_history)[-2], list(t_b.bbox_history)[-1]
+                jitter_a = abs((b2_a[2]-b2_a[0]) - (b1_a[2]-b1_a[0])) + abs((b2_a[3]-b2_a[1]) - (b1_a[3]-b1_a[1]))
+                jitter_b = abs((b2_b[2]-b2_b[0]) - (b1_b[2]-b1_b[0])) + abs((b2_b[3]-b2_b[1]) - (b1_b[3]-b1_b[1]))
+                if jitter_a > 10.0 or jitter_b > 10.0:
+                    low_jitter = False
+            
+            # Synchronized centroids
+            if len(t_a.centroid_history) >= 2 and len(t_b.centroid_history) >= 2:
+                acx_now, acy_now = t_a.centroid_history[-1]
+                acx_prev, acy_prev = t_a.centroid_history[-2]
+                bcx_now, bcy_now = t_b.centroid_history[-1]
+                bcx_prev, bcy_prev = t_b.centroid_history[-2]
+                
+                vel_a = math.sqrt((acx_now - acx_prev)**2 + (acy_now - acy_prev)**2)
+                vel_b = math.sqrt((bcx_now - bcx_prev)**2 + (bcy_now - bcy_prev)**2)
+                
+                if abs(vel_a - vel_b) > 0.015:
+                    synchronized_centroids = False
+                    
+            if smooth_motion and low_arm_velocity and low_jitter and synchronized_centroids and not has_aggression_signal:
+                self.calm_interaction_mode = True
+
+        elif len(t_keys) == 1:
+            t_single = self.trajectories[t_keys[0]]
+            if t_single.body_acceleration < 0.40:
+                smooth_motion = True
+            max_wrist_vel = max(t_single.wrist_velocities) if t_single.wrist_velocities else 0.0
+            if max_wrist_vel > 0.022:
+                low_arm_velocity = False
+            if smooth_motion and low_arm_velocity and not has_aggression_signal:
+                self.calm_interaction_mode = True
+
+        # ============================================================
         # TASK 2: CLOSE-COMBAT DETECTION Heuristics & Dedicated Mode
         # ============================================================
         close_combat_aggression = False
@@ -738,14 +898,15 @@ class ViolenceClassifier:
             if t_a.body_acceleration > 1.2 or t_b.body_acceleration > 1.2:
                 close_combat_aggression = True
 
-            # Trigger close_combat_mode (entanglement, head closeness, or overlapping torso + fast flailing)
-            if (chaotic_limb_overlap and proximity_dist < 0.25) or (head_dist < 0.15) or (close_combat_aggression and (repeated_strikes or arm_velocity_bursts)):
-                self.close_combat_mode = True
+            # Trigger close_combat_mode only if we have high proximity/overlap COMBINED with aggression signals (Task 5)
+            if has_aggression_signal:
+                if (chaotic_limb_overlap and proximity_dist < 0.25) or (head_dist < 0.15) or close_combat_aggression:
+                    self.close_combat_mode = True
 
         elif len(t_keys) == 1:
             # Merged person close-combat (YOLO body merge)
             t_single = self.trajectories[t_keys[0]]
-            if (t_single.body_acceleration > 1.1 or self.last_temporal_confidence > 0.40) and (any(v > 0.030 for v in t_single.wrist_velocities) or self.last_temporal_confidence > 0.50):
+            if has_aggression_signal and (t_single.body_acceleration > 1.1 or self.last_temporal_confidence > 0.40):
                 close_combat_aggression = True
                 self.close_combat_mode = True
 
@@ -802,21 +963,34 @@ class ViolenceClassifier:
             violence_score += 15
 
         # ============================================================
-        # TASK 1: DYNAMIC SCALING FOR CLOSE COMBAT / GRAPPLING
+        # TASK 4: REDUCE CLOSE-COMBAT BOOST (Task 4: scaled down from 1.30 to 1.10)
         # ============================================================
         if self.close_combat_mode or is_grappling_or_choking:
             # Dynamically boost/scale aggression score to ensure sensitivity
-            violence_score = int(violence_score * 1.30)
+            violence_score = int(violence_score * 1.10)
+
+        # ============================================================
+        # TASK 3: HUG / HANDSHAKE SUPPRESSION
+        # ============================================================
+        if self.calm_interaction_mode:
+            # Heavily suppress aggression score for calm interactions (clamp to LOW/MEDIUM)
+            # If they are just standing close/hugging/shaking hands: clamp to LOW (max 25)
+            # If moderate friendly movement: clamp to MEDIUM (max 42)
+            if not has_aggression_signal:
+                violence_score = min(25, violence_score)
+            else:
+                violence_score = min(42, violence_score)
 
         # ============================================================
         # TASK 4 & 5: AGGRESSION OVERRIDE MODE (Robust close-combat fallback)
         # ============================================================
-        if (self.last_temporal_confidence > 0.55 or chaotic_motion) and repeated_arm_speed and (skeleton_overlap or close_combat_aggression or is_grappling_or_choking):
-            # Force CRITICAL/HIGH threat (minimum score of 75)
-            violence_score = max(75, violence_score)
-        elif is_grappling_or_choking:
-            # Force at least HIGH (minimum score of 60)
-            violence_score = max(60, violence_score)
+        if not self.calm_interaction_mode:
+            if (self.last_temporal_confidence > 0.55 or chaotic_motion) and repeated_arm_speed and (skeleton_overlap or close_combat_aggression or is_grappling_or_choking):
+                # Force CRITICAL/HIGH threat (minimum score of 75)
+                violence_score = max(75, violence_score)
+            elif is_grappling_or_choking:
+                # Force at least HIGH (minimum score of 60)
+                violence_score = max(60, violence_score)
 
         # ============================================================
         # TASK 8: DEMO MODE OPTIMIZATION (Precise Target Boundaries)
@@ -837,43 +1011,121 @@ class ViolenceClassifier:
         if repeated_strikes and (self.punch_detected or self.close_combat_mode):
             violence_score = max(82, violence_score)
 
+        # ============================================================
+        # TASK 7: GLOBAL MOTION SUPPRESSION FOR CAMERA SHAKE
+        # ============================================================
+        if camera_motion_detected:
+            # Reduce aggression heavily (Task 7)
+            violence_score = int(violence_score * 0.2)
+
+        # ============================================================
+        # TASK 1: FAST VIOLENCE PATHWAY DETECTION
+        # ============================================================
+        extreme_wrist_speed = False
+        explosive_accel = False
+        
+        # Check active motion requirement (Task 2 & 3)
+        any_active_motion = False
+        for tk in t_keys:
+            traj = self.trajectories[tk]
+            max_wrist_vel = max(traj.wrist_velocities) if traj.wrist_velocities else 0.0
+            if max_wrist_vel > 0.045:
+                extreme_wrist_speed = True
+            if traj.body_acceleration > 1.35:
+                explosive_accel = True
+            
+            # Trajectory active motion check
+            if max_wrist_vel > 0.022 or traj.body_acceleration > 0.45 or traj.repeated_arm_strikes:
+                any_active_motion = True
+
+        self.fast_violence_mode = (
+            (self.punch_detected or self.recoil_active or repeated_strikes or extreme_wrist_speed or explosive_accel or (self.last_temporal_confidence > 0.65))
+            and not camera_motion_detected
+        )
+
+        # Require active motion and active aggression signals (Task 1 & 2)
+        if not has_aggression_signal and not any_active_motion:
+            self.no_new_aggression_frames += 1
+        else:
+            self.no_new_aggression_frames = 0
+
+        # Update self.recent_violence_counter (Task 6)
+        if self.fast_violence_mode:
+            self.recent_violence_counter = 30  # About 2-3 seconds at 10-15 FPS
+        elif self.recent_violence_counter > 0:
+            self.recent_violence_counter -= 1
+
         # Scale to 0.0 - 1.0 representation
         combined_score = min(1.0, violence_score / 100.0)
-        self.violence_score_history.append(combined_score)
 
-        smoothed_score = sum(self.violence_score_history) / len(self.violence_score_history)
+        # Rapid post-action decay (Task 1 & 7: decay by 0.65 instead of 0.92)
+        if self.no_new_aggression_frames >= 3:
+            decayed_history = collections.deque(maxlen=VIOLENCE_BUFFER_SIZE)
+            for val in self.violence_score_history:
+                decayed_history.append(val * 0.65)
+            self.violence_score_history = decayed_history
+            combined_score *= 0.65
 
-        # Resolve exact tactical action label (Task 8 Final Targets)
+        # ============================================================
+        # TASK 4: DYNAMIC SMOOTHING & DUAL PIPELINE
+        # ============================================================
+        if self.fast_violence_mode:
+            # Bypass rolling average (buffer size = 1) (Task 4)
+            self.violence_score_history.clear()
+            self.violence_score_history.append(combined_score)
+            smoothed_score = combined_score
+        else:
+            # Normal mode: use rolling average over 3 frames
+            self.violence_score_history.append(combined_score)
+            while len(self.violence_score_history) > 3:
+                self.violence_score_history.popleft()
+            smoothed_score = sum(self.violence_score_history) / len(self.violence_score_history)
+
+        # Resolve exact tactical action label (Task 8 Final Targets & Task 6 Active vs. Recent)
         smoothed_score_pct = smoothed_score * 100
         action = "Normal"
-        if smoothed_score_pct >= 75.0:
-            if repeated_strikes or arm_velocity_bursts:
-                action = "Fighting (Repeated Strikes)"
-            elif grappling_detected or is_grappling_or_choking:
-                action = "Physical Grappling"
+        
+        # ACTIVE VS RECENT VIOLENCE SEPARATION (Task 6)
+        is_active_fight = self.fast_violence_mode or has_aggression_signal or any_active_motion
+        violence_was_recent = self.recent_violence_counter > 0
+
+        if smoothed_score_pct >= 55.0:
+            if is_active_fight:
+                if repeated_strikes or arm_velocity_bursts:
+                    action = "Fighting (Repeated Strikes)"
+                elif self.punch_detected:
+                    action = "Punch Detected"
+                elif self.recoil_active:
+                    action = "Physical Assault (Recoil)"
+                elif grappling_detected or is_grappling_or_choking:
+                    action = "Physical Grappling"
+                else:
+                    action = "Fighting (Chaotic Motion)"
+            elif violence_was_recent:
+                # Active motion has stopped, but violence happened recently (Task 6)
+                action = "Recent Violence (Cooldown)"
             else:
-                action = "Fighting (Chaotic Motion)"
-        elif smoothed_score_pct >= 55.0:
-            if self.punch_detected:
-                action = "Punch Detected"
-            elif self.recoil_active:
-                action = "Physical Assault (Recoil)"
-            elif is_grappling_or_choking:
-                action = "Grappling / Restraint"
-            else:
-                action = "Aggressive Interaction"
+                action = "Suspicious Interaction"
         elif smoothed_score_pct >= 30.0:
-            if "fall_detected" in active_flags:
-                action = "Sudden Fall"
-            elif "suspicious_running" in active_flags:
-                action = "Suspicious Running"
+            if is_active_fight:
+                if "fall_detected" in active_flags:
+                    action = "Sudden Fall"
+                elif "suspicious_running" in active_flags:
+                    action = "Suspicious Running"
+                else:
+                    action = "Suspicious Interaction"
+            elif violence_was_recent:
+                action = "Recent Violence (Cooldown)"
             else:
                 action = "Suspicious Interaction"
         else:
-            action = "Normal"
+            if violence_was_recent and smoothed_score_pct > 15.0:
+                action = "Recent Violence (Cooldown)"
+            else:
+                action = "Normal"
 
         if len(active_flags) == 0 or (len(active_flags) == 1 and "combat_stance" in active_flags and max_aggression < 0.30):
-            if not self.punch_detected and not chaotic_motion and not close_combat_aggression:
+            if not self.punch_detected and not chaotic_motion and not close_combat_aggression and not violence_was_recent:
                 action = "Normal"
                 smoothed_score *= 0.4
 

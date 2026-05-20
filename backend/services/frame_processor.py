@@ -290,47 +290,80 @@ class FrameProcessor:
             self._result.female_count = int(round(sum(self._female_history) / len(self._female_history)))
 
     def _capture_loop(self):
+        # Prevent multiple locks on macOS (Task 4)
+        logger.info(f"[Capture] Initializing VideoCapture index {self.camera_index}")
         cap = cv2.VideoCapture(self.camera_index)
-        if not cap.isOpened():
-            logger.error(f"[Capture] Offline camera feed index {self.camera_index}")
-            self._run_placeholder_loop()
-            return
-
+        
         is_video_file = isinstance(self.camera_index, str)
         fps_target = WEBCAM_FPS_TARGET
 
-        if is_video_file:
-            video_fps = cap.get(cv2.CAP_PROP_FPS)
-            if video_fps > 0:
-                fps_target = video_fps
+        if cap.isOpened():
+            if is_video_file:
+                video_fps = cap.get(cv2.CAP_PROP_FPS)
+                if video_fps > 0:
+                    fps_target = video_fps
+            else:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_FPS,          WEBCAM_FPS_TARGET)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
+            logger.info(f"[Capture] Stream connected successfully (Target FPS: {fps_target:.2f})")
         else:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            cap.set(cv2.CAP_PROP_FPS,          WEBCAM_FPS_TARGET)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
+            logger.error(f"[Capture] Offline camera feed index {self.camera_index} on init. Triggering fallback placeholder.")
+            self._draw_fallback_frame()
 
         frame_interval = 1.0 / fps_target
         last_time      = time.time()
         frame_num      = 0
-
-        logger.info(f"[Capture] Stream connected successfully (Target FPS: {fps_target:.2f})")
+        consecutive_losses = 0
 
         while self._running:
             try:
+                # Task 4 & 7: macOS Camera Reconnect and Recovery flow
+                if not cap.isOpened() or consecutive_losses >= 10:
+                    logger.warning(f"[Capture] Stream offline or high frame losses ({consecutive_losses}/10). Releasing and reconnecting camera index {self.camera_index}...")
+                    cap.release()
+                    cv2.destroyAllWindows()
+                    time.sleep(1.5)
+                    cap = cv2.VideoCapture(self.camera_index)
+                    if cap.isOpened():
+                        if not is_video_file:
+                            cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
+                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                            cap.set(cv2.CAP_PROP_FPS,          WEBCAM_FPS_TARGET)
+                            cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
+                        logger.info("[Capture] Stream reconnected successfully!")
+                        consecutive_losses = 0
+                    else:
+                        logger.error("[Capture] Reconnect failed, drawing fallback frame.")
+                        self._draw_fallback_frame()
+                        consecutive_losses += 1
+                        time.sleep(0.5)
+                        continue
+
                 ret, frame = cap.read()
-                if not ret:
+                
+                # Task 7: Detect completely black/empty frames
+                is_black_frame = False
+                if ret and frame is not None and frame.size > 0:
+                    # Quick mean check on a highly downsampled image
+                    if np.mean(frame[::16, ::16]) < 1.0:
+                        is_black_frame = True
+
+                if not ret or frame is None or frame.size == 0 or is_black_frame:
+                    consecutive_losses += 1
+                    logger.warning(f"[Capture] Frame loss / black frame detected ({consecutive_losses}/10)")
+                    
+                    # Draw fallback frame so overlays and stream keep running (Task 1 & 5)
+                    self._draw_fallback_frame()
+                    
                     if is_video_file:
                         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                        continue
-                    logger.warning("[Capture] Frame loss — repeating block")
                     time.sleep(0.05)
                     continue
 
-                if frame is None or frame.size == 0:
-                    logger.warning("[Capture] Empty/Null frame read.")
-                    time.sleep(0.05)
-                    continue
-
+                # Valid frame read! Reset loss counter
+                consecutive_losses = 0
                 frame_num += 1
 
                 # Compute CPU differencing index fast
@@ -354,9 +387,12 @@ class FrameProcessor:
                 last_time = time.time()
             except Exception as e:
                 logger.error(f"[Capture] Capture thread error: {e}", exc_info=True)
+                consecutive_losses += 1
+                self._draw_fallback_frame()
                 time.sleep(0.05)
 
         cap.release()
+        cv2.destroyAllWindows()
 
     def _run_placeholder_loop(self):
         placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -387,6 +423,16 @@ class FrameProcessor:
                 item = self._frame_queue.get(timeout=1.0)
                 if item is None:
                     break
+
+                # Low-latency drain: if queue builds up, skip older frames to match realtime (Task 12, 14)
+                while self._frame_queue.qsize() > 0:
+                    try:
+                        skipped_item = self._frame_queue.get_nowait()
+                        if skipped_item is None:
+                            break
+                        item = skipped_item
+                    except queue.Empty:
+                        break
 
                 t_start = time.perf_counter()
 
@@ -435,7 +481,8 @@ class FrameProcessor:
                     fall_detected=fall_active,
                     chasing_detected=chasing_active,
                     punch_detected=punch_detected,
-                    recoil_active=temp_cls.recoil_active
+                    recoil_active=temp_cls.recoil_active,
+                    fast_violence_mode=temp_cls.fast_violence_mode
                 )
 
                 # 7. Timeline logs coordination
@@ -470,7 +517,7 @@ class FrameProcessor:
                     self._result.violence_smoothed   = violence_result.get("smoothed_confidence", 0.0)
                     self._result.active_threshold    = violence_result.get("active_threshold", 0.78)
                     self._result.action             = violence_result.get("action", "Normal")
-                    self._result.aggression_score   = violence_result.get("aggression_score", 0.0)
+                    self._result.aggression_score   = threat_score
 
                     self._result.weapon_detected    = weapon_result.get("weapon_detected", False)
                     self._result.weapon_label       = weapon_result.get("label", "")
@@ -541,9 +588,29 @@ class FrameProcessor:
             except Exception as e:
                 logger.error(f"[ProcessThread] AI pipeline failure: {e}", exc_info=True)
 
-    def _encode_jpeg(self, frame: np.ndarray, frame_num: int):
+    def _draw_fallback_frame(self):
         try:
-            display = self._draw_overlays(frame.copy(), frame_num)
+            # Create a professional dark blue fallback frame
+            placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.rectangle(placeholder, (0, 0), (640, 480), (12, 12, 22), -1)
+            cv2.putText(
+                placeholder, "CAMERA SIGNAL LOST",
+                (120, 210), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 255), 2, cv2.LINE_AA
+            )
+            cv2.putText(
+                placeholder, "RECONNECTING...",
+                (230, 260), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA
+            )
+            
+            ts = datetime.now().strftime("%H:%M:%S")
+            cv2.putText(
+                placeholder, ts,
+                (270, 310), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (60, 60, 80), 1, cv2.LINE_AA
+            )
+            
+            # Superimpose overlays so HUD keeps running (Task 1 & 5)
+            display = self._draw_overlays(placeholder, 0)
+            
             ok, buf = cv2.imencode(
                 ".jpg", display,
                 [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
@@ -552,7 +619,32 @@ class FrameProcessor:
                 with self._jpeg_lock:
                     self._latest_jpeg = buf.tobytes()
         except Exception as e:
+            logger.error(f"[Fallback] Error rendering fallback frame: {e}")
+
+    def _encode_jpeg(self, frame: np.ndarray, frame_num: int):
+        try:
+            # Task 2: Validate frame properties before imencode
+            if frame is None or frame.size == 0 or len(frame.shape) < 2:
+                logger.warning("[JPEG] Null/Empty frame skipped for encoding.")
+                self._draw_fallback_frame()
+                return
+
+            display = self._draw_overlays(frame.copy(), frame_num)
+            
+            # Task 3: Validate imencode success flag
+            ok, buf = cv2.imencode(
+                ".jpg", display,
+                [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+            )
+            if ok:
+                with self._jpeg_lock:
+                    self._latest_jpeg = buf.tobytes()
+            else:
+                logger.warning("[JPEG] cv2.imencode returned ok = False.")
+                self._draw_fallback_frame()
+        except Exception as e:
             logger.debug(f"[JPEG] Encode issue: {e}")
+            self._draw_fallback_frame()
 
     def _draw_overlays(self, frame: np.ndarray, frame_num: int) -> np.ndarray:
         with self._result_lock:

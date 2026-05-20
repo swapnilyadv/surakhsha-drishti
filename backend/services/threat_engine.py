@@ -28,48 +28,28 @@ class ThreatEngine:
         fall_detected: bool = False,
         chasing_detected: bool = False,
         punch_detected: bool = False,
-        recoil_active: bool = False
+        recoil_active: bool = False,
+        fast_violence_mode: bool = False
     ) -> tuple[str, float]:
         """
         Combines parameters mathematically to generate a threat score (0.0 to 1.0)
         and map it to a classification level: LOW, MEDIUM, HIGH, CRITICAL.
         """
-        # 1. Normalize crowd density component (max reference = 6 persons for high density)
-        crowd_density = min(1.0, person_count / 6.0)
+        # Centralized shared threat score (Task 4)
+        combined_score = aggression_score
+        
+        # Boost if weapon is verified
+        if weapon_detected and weapon_confidence > 0.40:
+            combined_score = max(combined_score, 0.85)
 
-        # 2. Base weighted combination (Task 6 rebalanced weighting)
-        # - Aggression score has 50% weight (proximity and collision persistence)
-        # - Weapon presence has 30% weight
-        # - Spatial motion intensity has 10% weight
-        # - Crowd factor has 10% weight
-        base_score = (aggression_score * 0.50) + \
-                     (weapon_confidence * 0.30 if weapon_detected else 0.0) + \
-                     (motion_intensity * 0.10) + \
-                     (crowd_density * 0.10)
-
-        # 3. Dynamic context-aware boosts (Task 6 rebalanced weightings)
-        boost = 0.0
-        if repeated_strikes:
-            boost += 0.22  # Increased repeated strikes weight
-        if fall_detected:
-            boost += 0.10
-        if chasing_detected:
-            boost += 0.12
-        if punch_detected:
-            boost += 0.20  # Proximity combat/collision persistence boost
-        if recoil_active:
-            boost += 0.15  # Recoil confirmation displacement boost
-
-        # Combined score capped between 0.0 and 1.0
-        combined_score = min(1.0, max(0.0, base_score + boost))
-
-        # 4. Resolve Threat Level (Task 4 Rebalanced Boundaries)
+        # 4. Resolve Threat Level (Task 5 Rebalanced Boundaries)
+        score_pct = combined_score * 100.0
         tentative_level = "LOW"
-        if combined_score >= 0.75 or (weapon_detected and aggression_score > 0.45):
+        if score_pct >= 80.0:
             tentative_level = "CRITICAL"
-        elif combined_score >= 0.55:
+        elif score_pct >= 55.0:
             tentative_level = "HIGH"
-        elif combined_score >= 0.30:
+        elif score_pct >= 30.0:
             tentative_level = "MEDIUM"
         else:
             tentative_level = "LOW"
@@ -79,11 +59,13 @@ class ThreatEngine:
         # - repeated aggressive movement persists (repeated_strikes is True)
         # - motion intensity is extremely high (motion_intensity > 0.65)
         # - interactive punches/combat are active (punch_detected or aggression_score > 0.70)
+        # - fast_violence_mode is active (Task 2 & 5)
         rapid_escalation = (
             repeated_strikes or 
             motion_intensity > 0.65 or 
             punch_detected or
-            aggression_score > 0.70
+            aggression_score > 0.70 or
+            fast_violence_mode
         )
 
         if tentative_level in ["HIGH", "CRITICAL"]:
@@ -95,5 +77,22 @@ class ThreatEngine:
             level = "MEDIUM"
         else:
             level = tentative_level
+
+        # Perfect consistency adjustment: scale threat score to match threat level's exact range (Task 4)
+        if level == "LOW":
+            combined_score = min(0.29, combined_score)
+        elif level == "MEDIUM":
+            if combined_score >= 0.55:
+                combined_score = 0.54
+            elif combined_score < 0.30:
+                combined_score = 0.30
+        elif level == "HIGH":
+            if combined_score >= 0.80:
+                combined_score = 0.79
+            elif combined_score < 0.55:
+                combined_score = 0.55
+        elif level == "CRITICAL":
+            if combined_score < 0.80:
+                combined_score = 0.80
 
         return level, round(combined_score, 3)
