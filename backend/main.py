@@ -331,6 +331,7 @@ async def broadcast_loop():
                 "person_count":        result["person_count"],
                 "male_count":          result["male_count"],
                 "female_count":        result["female_count"],
+                "total_persons":       result["male_count"] + result["female_count"],
                 "timestamp":           result["timestamp"],
                 "frame_count":         result["frame_count"],
                 

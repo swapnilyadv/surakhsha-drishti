@@ -31,7 +31,6 @@ interface TimelineEvent {
 export default function StatsPanel({
   isAlert, evidence, cameraCount, activeCameraCount,
   cameras, alertCamIds, onUpdateEvidence,
-  liveMale = 0, liveFemale = 0,
 }: Props) {
   const activeIncidents = evidence.slice(0, 5);
   const [sessionStart] = useState(Date.now());
@@ -86,6 +85,8 @@ export default function StatsPanel({
   }, [sessionStart]);
 
   const mono: React.CSSProperties = { fontFamily: "monospace" };
+  const liveMale = detection.male_count ?? 0;
+  const liveFemale = detection.female_count ?? 0;
   const totalPeople = liveMale + liveFemale;
 
   // Resolve threat styling configurations
@@ -231,7 +232,7 @@ export default function StatsPanel({
         <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 190, overflowY: "auto", paddingRight: 4 }}>
           {eventsTimeline.length === 0 ? (
             <div style={{ padding: "14px 0", textAlign: "center", border: "1px dashed rgba(255,255,255,0.05)", borderRadius: 2 }}>
-              <div style={{ ...mono, fontSize: 8, color: "var(--text-dim)", letterSpacing: 1 }}>NO ANOMALOUS INCIDENTS</div>
+              <div style={{ ...mono, fontSize: 9, color: "var(--text-dim)", letterSpacing: 1, fontWeight: "bold" }}>NO ACTIVE INCIDENTS</div>
             </div>
           ) : (
             eventsTimeline.map((evt, idx) => {
@@ -257,9 +258,8 @@ export default function StatsPanel({
       <Block label="LIVE EVIDENCE PIPELINE">
         <div className="space-y-4 max-h-[350px] overflow-y-auto pr-1">
           {activeIncidents.length === 0 ? (
-            <div className="py-8 text-center border border-dashed border-zinc-800">
-              <div className="text-zinc-600 text-[10px] font-mono tracking-widest">SYSTEM SECURE</div>
-              <div className="text-zinc-800 text-[8px] font-mono mt-1 uppercase">No active recordings</div>
+            <div className="py-8 text-center border border-dashed border-zinc-800" style={{ border: "1px dashed rgba(255,255,255,0.05)", padding: "14px 0" }}>
+              <div style={{ ...mono, fontSize: 9, color: "var(--text-dim)", letterSpacing: 1, fontWeight: "bold", textAlign: "center" }}>NO ACTIVE INCIDENTS</div>
             </div>
           ) : (
             activeIncidents.map(inc => (

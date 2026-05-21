@@ -72,12 +72,10 @@ export default function EvidenceDetail({ evidence, onClose, onUpdate }: Props) {
           {/* Left Side: Visuals */}
           <div style={{ borderRight: "1px solid var(--border)" }}>
             <div style={{ background: "#000", aspectRatio: "16/9", width: "100%", height: 350, position: "relative" }}>
-              {evidence.videoUrl ? (
-                evidence.videoUrl.includes("/stream/mjpeg") ? (
-                  <img src={evidence.videoUrl} style={{ width: "100%", height: "100%", objectFit: "contain" }} alt="Live Surveillance Feed" />
-                ) : (
-                  <video src={evidence.videoUrl} controls autoPlay loop style={{ width: "100%", height: "100%" }} />
-                )
+              {evidence.videoUrl && !evidence.videoUrl.includes("/stream/mjpeg") ? (
+                <video src={evidence.videoUrl} controls autoPlay loop style={{ width: "100%", height: "100%" }} />
+              ) : (evidence.snapshotUrl || evidence.thumbnail) ? (
+                <img src={evidence.snapshotUrl || evidence.thumbnail} style={{ width: "100%", height: "100%", objectFit: "contain" }} alt="Incident Snapshot" />
               ) : (
                 <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--bg3)" }}>
                   <div style={{ fontSize: 40, marginBottom: 10 }}>📹</div>

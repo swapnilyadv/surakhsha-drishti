@@ -88,8 +88,8 @@ export default function EvidenceVault({ evidence, onClearAll, onUpdate }: Props)
 
                   {/* Thumbnail */}
                   <div style={{ height: 160, background: "var(--bg3)", position: "relative", overflow: "hidden" }}>
-                    {ev.thumbnail ? (
-                      <img src={ev.thumbnail} alt="Detection frame" style={{ width: "100%", height: "100%", objectFit: "cover" }}/>
+                    {(ev.snapshotUrl || ev.thumbnail) ? (
+                      <img src={ev.snapshotUrl || ev.thumbnail} alt="Detection frame" style={{ width: "100%", height: "100%", objectFit: "cover" }}/>
                     ) : (
                       <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, opacity: 0.4 }}>
                         <div style={{ fontSize: 24 }}>📹</div>

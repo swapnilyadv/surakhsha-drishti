@@ -248,6 +248,7 @@ class FrameProcessor:
                 "violence_confidence": round(r.violence_confidence, 3),
                 "male_count":         r.male_count,
                 "female_count":       r.female_count,
+                "total_persons":      r.male_count + r.female_count,
                 "timestamp":          r.timestamp,
                 "frame_count":        r.frame_count,
 

@@ -11,6 +11,8 @@ export interface EvidenceEntry {
   type: string;            // VIOLENCE, HARASSMENT, etc.
   thumbnail?: string;      // base64 data-URL
   videoUrl?: string;       // blob URL for session playback
+  snapshotUrl?: string;    // relative/absolute URL to JPG snapshot
+  duration?: string;       // human-readable clip duration
   maleCount?: number;
   femaleCount?: number;
   weaponDetected?: boolean;
@@ -53,7 +55,8 @@ export function useEvidenceStore() {
           // map relative URLs to absolute backend domain path
           const mapped = data.map(item => ({
             ...item,
-            videoUrl: item.videoUrl && item.videoUrl.startsWith("/") ? `${backendUrl}${item.videoUrl}` : item.videoUrl
+            videoUrl: item.videoUrl && item.videoUrl.startsWith("/") ? `${backendUrl}${item.videoUrl}` : item.videoUrl,
+            snapshotUrl: item.snapshotUrl && item.snapshotUrl.startsWith("/") ? `${backendUrl}${item.snapshotUrl}` : item.snapshotUrl
           }));
           
           const wasSeeded = localStorage.getItem("sd_seeded");

@@ -113,6 +113,18 @@ class EvidenceManager:
                 self.active_lat = lat
                 self.active_lng = lng
                 self.start_time = time.time()
+                self.active_ev_id = f"EVD-REC-{int(time.time())}"
+                
+                # Save JPG snapshot on threat trigger (Section 2)
+                snapshots_dir = self.output_dir / "snapshots"
+                snapshots_dir.mkdir(parents=True, exist_ok=True)
+                snapshot_file = snapshots_dir / f"{self.active_ev_id}.jpg"
+                try:
+                    import cv2
+                    cv2.imwrite(str(snapshot_file), frame)
+                    logger.info(f"[Evidence] Saved jpg snapshot to {snapshot_file}")
+                except Exception as ex:
+                    logger.error(f"[Evidence] Failed to save snapshot: {ex}")
                 
                 # Reset peaks
                 self.active_max_male = male_count
@@ -162,7 +174,8 @@ class EvidenceManager:
         if not final_file:
             return None
         
-        ev_id = f"EVD-REC-{int(time.time())}"
+        ev_id = getattr(self, "active_ev_id", f"EVD-REC-{int(time.time())}")
+        snapshot_url = f"/recordings/snapshots/{ev_id}.jpg"
         timestamp_label = datetime.now().strftime("%I:%M %p")
         iso_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         
@@ -175,6 +188,7 @@ class EvidenceManager:
             "confidence": float(round(self.active_max_confidence if self.active_max_confidence > 0 else 0.88, 2)),
             "type": self.active_threat_type,
             "videoUrl": f"/recordings/{final_file.name}",
+            "snapshotUrl": snapshot_url,
             "status": "Active",
             "duration": f"{duration} sec",
             "locationName": self.active_camera_label,
