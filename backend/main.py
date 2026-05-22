@@ -643,6 +643,9 @@ async def mjpeg_stream(camId: str = "default", lat: float = None, lng: float = N
             "Cache-Control":    "no-cache, no-store",
             "X-Accel-Buffering": "no",
             "Connection":       "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
         },
     )
 
