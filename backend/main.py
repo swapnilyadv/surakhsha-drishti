@@ -1,36 +1,3 @@
-"""
-Suraksha Drishti — FastAPI Backend v4.0
-========================================
-Production-grade AI surveillance API server.
-
-Serves:
-  WebSocket  ws://localhost:8765/ws/detections     ← real-time detection events
-  MJPEG      http://localhost:8765/api/stream/mjpeg ← live annotated video feed
-  REST       http://localhost:8765/api/health        ← health check
-  REST       http://localhost:8765/api/model-status  ← model load status + stats
-  REST       http://localhost:8765/api/detection/latest ← latest JSON (polling)
-
-Architecture:
-  ┌─────────────────────────────────────────────────────────────┐
-  │  Thread 1: webcam-capture                                   │
-  │    OpenCV VideoCapture → frame queue + MJPEG JPEG buffer    │
-  └───────────────────────────┬─────────────────────────────────┘
-                              │ frame queue (maxsize=3)
-  ┌───────────────────────────▼─────────────────────────────────┐
-  │  Thread 2: ai-process                                       │
-  │    HumanDetector → PoseEstimator → ViolenceDetector        │
-  │                  → WeaponDetector → DetectionResult         │
-  └───────────────────────────┬─────────────────────────────────┘
-                              │ shared DetectionResult (lock)
-  ┌───────────────────────────▼─────────────────────────────────┐
-  │  FastAPI (async, main thread)                               │
-  │    /api/stream/mjpeg      → StreamingResponse (MJPEG)       │
-  │    /ws/detections         → WebSocket broadcast             │
-  │    /api/health            → JSON                            │
-  │    /api/model-status      → JSON                            │
-  └─────────────────────────────────────────────────────────────┘
-"""
-
 import asyncio
 import json
 import logging
