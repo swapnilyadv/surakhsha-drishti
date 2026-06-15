@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"] = "1"
 import sys
 import time
 from contextlib import asynccontextmanager
